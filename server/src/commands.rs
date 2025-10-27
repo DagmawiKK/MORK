@@ -26,8 +26,13 @@ use super::{BoxedErr, MorkService, WorkThreadHandle};
 use super::status_map::{StatusRecord, FetchError, ParseError};
 use super::resource_store::ResourceHandle;
 use super::server_space::*;
+use super::weighted_space::*;
 use super::status_map::*;
 
+use std::any::type_name;
+fn type_of<T>(_: &T) -> &'static str {
+    type_name::<T>()
+}
 pub type BoxStream = Pin<Box<dyn Stream<Item = Result<Frame<Bytes>, hyper::Error>> + Send + Sync + 'static>>;
 
 pub enum WorkResult {
@@ -1547,6 +1552,47 @@ async fn get_all_post_frame_bytes(req : &mut Request<IncomingBody>) -> Result<By
 }
 
 // ===***===***===***===***===***===***===***===***===***===***===***===***===***===***===***
+// upload_weight
+// ===***===***===***===***===***===***===***===***===***===***===***===***===***===***===***
+
+/// Upload data directly to the map via a post request
+// pub struct UploadWCmd;
+//
+// impl CommandDefinition for UploadWCmd {
+//
+//     const NAME: &'static str = "uploadw";
+//     const CONST_CMD: &'static Self = &Self;
+//     const CONSUME_WORKER: bool = true;
+//
+//     fn args() -> &'static [ArgDef] {
+//         &[ArgDef{
+//             arg_type: ArgType::String,
+//             name: "pattern",
+//             desc: "The pattern to store in a weighted space",
+//             required: true,
+//          },
+//          ArgDef{
+//             arg_type: ArgType::String,
+//             name: "weight",
+//             desc: "the weight for the assosciated pattern",
+//             required: true,
+//         }]
+//     }
+//
+//     fn properties() -> &'static [PropDef] {
+//         &[]
+//     }
+//
+//     async fn work(ctx: MorkService, cmd: Command, thread: Option<WorkThreadHandle>, req: Request<IncomingBody>) -> Result<WorkResult, CommandError> {
+//        
+//         let pattern = cmd.args[0].as_str();
+//         let value = cmd.args[1].as_str().parse().unwrap_or(0.0);
+//
+//         Ok(format!("the value is {:?} {:?} {:?}", pattern, value, type_of(&ctx.0.weighted_space.primary_map)).into())
+//         
+//     }
+// }    
+// ===***===***===***===***===***===***===***===***===***===***===***===***===***===***===***
 // Command mechanism implementation
 // ===***===***===***===***===***===***===***===***===***===***===***===***===***===***===***
 
@@ -1745,7 +1791,7 @@ impl<'a> DerivedPrefix<'a> {
 }
 
 // wrapper for [`mork_bytestring::Expr::prefix`] to make the interface more straight-forward
-fn derive_prefix_from_expr_slice(expr_slice : &[u8]) -> DerivedPrefix<'_>{
+pub fn derive_prefix_from_expr_slice(expr_slice : &[u8]) -> DerivedPrefix<'_>{
     unsafe {
       match (mork_bytestring::Expr{
           ptr : expr_slice.as_ptr() as *mut _

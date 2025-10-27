@@ -30,6 +30,8 @@ mod commands;
 use commands::*;
 
 mod status_map;
+mod weighted_space;
+use weighted_space::*;
 mod server_space;
 use server_space::*;
 use mork::{Space, OwnedExpr};
@@ -75,6 +77,8 @@ struct MorkServiceInternals {
     space: ServerSpace,
     /// A monotonically incrementing counter so each request has a unique ID
     request_counter: AtomicU64,
+    
+    weighted_space: WeightedSpace,
 
     //GOAT, need cmd-logger to facilitate replay, and maybe a separate human-readable log
     //GOAT, need permissions model
@@ -98,6 +102,8 @@ impl MorkService {
 
         let space = ServerSpace::new();
 
+        let weighted_space = WeightedSpace::new();
+
         let internals = MorkServiceInternals {
             stop_cmd: Notify::new(),
             workers: WorkerPool::new(),
@@ -105,6 +111,7 @@ impl MorkService {
             resource_store,
             http_client,
             request_counter,
+            weighted_space,
         };
         Self(Arc::new(internals))
     }
@@ -565,6 +572,7 @@ impl Service<Request<IncomingBody>> for MorkService {
             | GET => StatusCmd
             | GET => StopCmd
             | POST => UploadCmd
+            | POST => UploadWCmd
 
 
             | GET => MettaThreadCmd
@@ -584,6 +592,7 @@ impl Service<Request<IncomingBody>> for MorkService {
             | GET => StatusStreamCmd
             | GET => StopCmd
             | POST => UploadCmd
+            // | POST => UploadWCmd
             // neo4j
             | GET => LoadNeo4jTriplesCmd
             | GET => LoadNeo4jNodePropertiesCmd
