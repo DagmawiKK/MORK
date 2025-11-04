@@ -16,6 +16,7 @@ use crate::server_space::{ServerPermissionErr, ServerPermissionHead};
 use crate::status_map::{self, *};
 use crate::commands::*;
 use rand;
+use std::collections::HashMap;
 
 use std::any::type_name;
 fn type_of<T>(_: &T) -> &'static str {
@@ -64,22 +65,20 @@ impl WeightedSpace {
         
         let mut reader = self.new_reader(&[], &()).unwrap();
         let mut rz = self.read_zipper(&mut reader);
+        let mut random_num: f32 = 0.0;
 
         while rz.child_count() >= 1 {
 
             // 4) descend_until the first fork in the path i.e where the path splits
-            let mut val = rz.val();
-            let mut path = rz.origin_path();
             if rz.val().is_none() {
                 rz.descend_until();
             }
-            val = rz.val();
-            path = rz.origin_path();            
+            
             // 5) returns a vec of tuple for agg of each child
             let choice_param = self.children_agg_w(&mut rz).unwrap();
             
             // 6) choose based on the path and rand value
-            let choice = self.choice(choice_param, &rz);
+            let choice = self.choice(choice_param, &rz, &mut random_num);
 
             // 7) return if value is selected else conitnue to selected path
             let byte = match choice {
@@ -98,12 +97,12 @@ impl WeightedSpace {
         String::from_utf8(path.to_vec()).unwrap()
     }
 
-    fn children_agg_w<'s, Z>(&self, mut path:&mut Z) -> Result<Vec<(f32, u8)>, Infallible> 
+    fn children_agg_w<'s, Z>(&self, mut path:&mut Z) -> Result<HashMap<u8, f32>, Infallible> 
      where Z: WSpaceReaderZipper<'s>,
     {
 
         // 1) create a vector to store the agg_w of child and its mask
-        let mut total: Vec<(f32, u8)> = Vec::new();
+        let mut total = HashMap::new();
 
 
         for b in path.child_mask().iter() {
@@ -114,7 +113,7 @@ impl WeightedSpace {
             // let mut reader = self.new_reader(&[b], &()).unwrap();
             let rz = self.read_zipper(&mut reader);
             let ch_agg_w = self.node_agg_w(rz).unwrap();
-            total.push((ch_agg_w, b));
+            total.insert(b, ch_agg_w);
             // path.ascend_byte();
         }
             
@@ -135,73 +134,43 @@ impl WeightedSpace {
         total// .map(|s| s - root_val)
     }
 
-    fn choice<'a, Z>(&self, mut choice_param: Vec<(f32, u8)>, path: &Z) -> PathChoice 
+    fn choice<'a, Z>(&self, choice_param: HashMap<u8, f32>, path: &Z, random_num: &mut f32) -> PathChoice
     where Z: WSpaceReaderZipper<'a>
     {
 
         // get agreagte weight of all values
-        let p_path = path.origin_path();
         let mut reader = self.new_reader(path.origin_path(), &()).unwrap();
         let rz = self.read_zipper(&mut reader);
-        let mut root_agg_w = self.node_agg_w(rz).unwrap();
+        let root_agg_w = self.node_agg_w(rz).unwrap();
 
         let mut reader = self.new_reader(path.origin_path(), &()).unwrap();
         let rz = self.read_zipper(&mut reader);
         
+        if *random_num == 0.0 {
+            *random_num = rand::random_range(0.0..=root_agg_w);
+        }
         // if path as a value chose between paths and values
         if rz.val().is_some() {
-            let focus_val = path.val().unwrap();
-            // root_agg_w -= focus_val;
-            if !self.path_v_val(focus_val, &choice_param, root_agg_w) {
+            if rz.val().unwrap() >= &random_num {
                 return PathChoice::Value(())
             }
         }
 
-        let r_val = rz.val();
-        let r_path = rz.origin_path();
 
-        let mut random_num = rand::random_range(0.0..=root_agg_w);
-
-        // random == 60 
-        // sort in descnding order of aggregate weights
         let mut path: u8 = 0;
-        choice_param.sort_by(|a, b| b.0.partial_cmp(&a.0).expect("No NaN values expected"));
 
         // chose a path
-        for (i, u) in choice_param {
-            if i >= random_num { 
-                path = u; 
+        for (u, i) in &choice_param {
+            if i >= &random_num { 
+                path = *u; 
                 break
             }
-            random_num -= i;
+            *random_num -= *i;
         }
 
         PathChoice::Path(path)
             
     }
-
-    // return true if its path false if value
-    fn path_v_val(&self, focus_val: &f32, choice_param: &Vec<(f32, u8)>, root_agg_w :f32) -> bool {
-
-        let random_num = rand::random_range(0.0..=root_agg_w);
-        let sum: f32 = choice_param.iter().map(|(i, _)| i).sum();
-
-        if sum > *focus_val {
-            if sum >= random_num {
-                true
-            } else {
-                false 
-            }
-        } else {
-            if *focus_val >= random_num {
-                false
-            } else {
-                true
-            }
-        } 
-    }
-
-
 
 }
 
