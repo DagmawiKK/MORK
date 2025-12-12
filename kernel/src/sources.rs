@@ -11,8 +11,8 @@ pub(crate) enum ResourceRequest {
 }
 
 pub(crate) enum Resource<'trie, 'path> {
-    BTM(ReadZipperUntracked<'trie, 'path, ()>),
-    ACT(ACTMmapZipper<'trie, ()>)
+    BTM(ReadZipperUntracked<'trie, 'path, u64>),
+    ACT(ACTMmapZipper<'trie, u64>)
 }
 
 pub trait Source {
@@ -21,7 +21,7 @@ pub trait Source {
     // step 2: request access to resources before running
     fn request(&self) -> impl Iterator<Item=ResourceRequest>;
     // step 3: create the factor in the product/the (virtual) zipper for the source
-    fn source<'trie, 'path, It : Iterator<Item=Resource<'trie, 'path>>>(&self, it: It) -> AFactor<'trie, ()> where 'path : 'trie;
+    fn source<'trie, 'path, It : Iterator<Item=Resource<'trie, 'path>>>(&self, it: It) -> AFactor<'trie, u64> where 'path : 'trie;
 }
 
 struct BTMSource {
@@ -36,7 +36,7 @@ impl Source for BTMSource {
         std::iter::once(ResourceRequest::BTM([].as_slice()))
     }
 
-    fn source<'trie, 'path, It: Iterator<Item=Resource<'trie, 'path>>>(&self, mut it: It) -> AFactor<'trie, ()> where 'path : 'trie {
+    fn source<'trie, 'path, It: Iterator<Item=Resource<'trie, 'path>>>(&self, mut it: It) -> AFactor<'trie, u64> where 'path : 'trie {
         // (I (BTM <pat1>) (ACT <filename> <pat2>)
         //    --factor1--  -----factor2---------
         // prefix: '[2] BTM'
@@ -62,7 +62,7 @@ impl Source for ACTSource {
         std::iter::once(ResourceRequest::ACT(self.act))
     }
 
-    fn source<'trie, 'path, It: Iterator<Item=Resource<'trie, 'path>>>(&self, mut it: It) -> AFactor<'trie, ()> where 'path : 'trie {
+    fn source<'trie, 'path, It: Iterator<Item=Resource<'trie, 'path>>>(&self, mut it: It) -> AFactor<'trie, u64> where 'path : 'trie {
         // prefix: '[3] ACT <filename>'
         static CONSTANT_PREFIX: [u8; 5] = [item_byte(Tag::Arity(3)), item_byte(Tag::SymbolSize(3)), b'A', b'C', b'T'];
         let Resource::ACT(rz) = it.next().unwrap() else { unreachable!() };
@@ -83,7 +83,7 @@ struct CmpSource {
 }
 
 impl CmpSource {
-    fn policy(ctx: (usize, PathMap<()>), p: &[u8], c: usize) -> ((usize, PathMap<()>), Option<ReadZipperOwned<()>>) {
+    fn policy(ctx: (usize, PathMap<u64>), p: &[u8], c: usize) -> ((usize, PathMap<u64>), Option<ReadZipperOwned<u64>>) {
         let (cmp, map) = ctx;
         if c == 0 {
             if cmp == 0 {
@@ -92,7 +92,7 @@ impl CmpSource {
                 let e = Expr{ ptr: p.as_ptr().cast_mut() };
                 let mut qv = p.to_vec();
                 e.shift(e.newvars() as _, &mut mork_expr::ExprZipper::new(Expr{ ptr: qv.as_mut_ptr() }));
-                ((cmp, map), Some(PathMap::single(&qv[..], ()).into_read_zipper(&[])))
+                ((cmp, map), Some(PathMap::single(&qv[..], 0u64).into_read_zipper(&[])))
             } else if cmp == 1 {
                 let mut cloned = map.clone();
                 let present = cloned.remove(p).is_some();
@@ -127,13 +127,13 @@ impl Source for CmpSource {
         std::iter::once(ResourceRequest::BTM([].as_slice()))
     }
 
-    fn source<'trie, 'path, It: Iterator<Item=Resource<'trie, 'path>>>(&self, mut it: It) -> AFactor<'trie, ()> where 'path : 'trie {
+    fn source<'trie, 'path, It: Iterator<Item=Resource<'trie, 'path>>>(&self, mut it: It) -> AFactor<'trie, u64> where 'path : 'trie {
         static EQ_PREFIX: [u8; 4] = [item_byte(Tag::Arity(3)), item_byte(Tag::SymbolSize(2)), b'=', b'='];
         static NE_PREFIX: [u8; 4] = [item_byte(Tag::Arity(3)), item_byte(Tag::SymbolSize(2)), b'!', b'='];
         let Resource::BTM(rz) = it.next().unwrap() else { unreachable!() };
         let map = rz.make_map().unwrap();
         let rz = DependentProductZipperG::new_enroll(rz, (self.cmp, map),
-            CmpSource::policy as for<'a> fn((usize, PathMap<()>), &'a [u8], usize) -> ((usize, PathMap<()>), Option<ReadZipperOwned<()>>));
+            CmpSource::policy as for<'a> fn((usize, PathMap<u64>), &'a [u8], usize) -> ((usize, PathMap<u64>), Option<ReadZipperOwned<u64>>));
         let rz = PrefixZipper::new(
             if self.cmp == 0 { &EQ_PREFIX[..] }
             else if self.cmp == 1 { &NE_PREFIX[..] }
@@ -146,11 +146,11 @@ impl Source for CmpSource {
 pub enum ASource { PosSource(BTMSource), ACTSource(ACTSource), CmpSource(CmpSource) }
 
 #[derive(PolyZipper)]
-pub enum AFactor<'trie, V: Clone + Send + Sync + Unpin + 'static = ()> {
+pub enum AFactor<'trie, V: Clone + Send + Sync + Unpin + 'static = u64> {
     PosSource(PrefixZipper<'trie, ReadZipperUntracked<'trie, 'trie, V>>),
     ACTSource(PrefixZipper<'trie, ACTMmapZipper<'trie, V>>),
     CmpSource(PrefixZipper<'trie, DependentProductZipperG<'trie, ReadZipperUntracked<'trie, 'trie, V>,
-        ReadZipperOwned<V>, V, (usize, PathMap<()>), for<'a> fn((usize, PathMap<()>), &'a [u8], usize) -> ((usize, PathMap<()>), Option<ReadZipperOwned<V>>)>>),
+        ReadZipperOwned<V>, V, (usize, PathMap<u64>), for<'a> fn((usize, PathMap<u64>), &'a [u8], usize) -> ((usize, PathMap<u64>), Option<ReadZipperOwned<V>>)>>),
 }
 
 impl Source for ASource {
@@ -176,7 +176,7 @@ impl Source for ASource {
         }
     }
 
-    fn source<'trie, 'path, It: Iterator<Item=Resource<'trie, 'path>>>(&self, mut it: It) -> AFactor<'trie, ()> where 'path : 'trie {
+    fn source<'trie, 'path, It: Iterator<Item=Resource<'trie, 'path>>>(&self, mut it: It) -> AFactor<'trie, u64> where 'path : 'trie {
         match self {
             ASource::PosSource(s) => { s.source(it) }
             ASource::ACTSource(s) => { s.source(it) }
