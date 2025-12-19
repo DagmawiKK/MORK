@@ -635,3 +635,32 @@ impl Sink for ASink {
         }
     }
 }
+
+fn dump_all_sexpr<T:Send + Sync + Clone + Unpin>(wpath:&mut PathMap<T>) {
+    let mut rz = wpath.read_zipper();
+    let mut i = 0usize;
+    let mut w = Vec::new();
+    while rz.to_next_val() {
+        // println!("{}", serialize(rz.path()));
+        Expr{ ptr: rz.path().as_ptr().cast_mut() }.serialize2(&mut w, |s| {
+            #[cfg(feature="interning")]
+            {
+                let symbol = i64::from_be_bytes(s.try_into().unwrap()).to_be_bytes();
+                let mstr = self.sm.get_bytes(symbol).map(unsafe { |x| std::str::from_utf8_unchecked(x) });
+                // println!("symbol {symbol:?}, bytes {mstr:?}");
+                unsafe { std::mem::transmute(mstr.expect(format!("failed to look up {:?}", symbol).as_str())) }
+            }
+            #[cfg(not(feature="interning"))]
+            unsafe { std::mem::transmute(std::str::from_utf8_unchecked(s)) }
+        }, |i, intro| { Expr::VARNAMES[i as usize] });
+        // w.write(serialize(rz.path()).as_bytes());
+        w.write(&[b'\n']).map_err(|x| x.to_string()).unwrap_or(0 as usize);
+        i += 1;
+    }
+
+    // s.dump_all_sexpr(&mut v).unwrap();
+    let res = String::from_utf8(w).unwrap();
+
+    println!("result: {res}");
+
+}
