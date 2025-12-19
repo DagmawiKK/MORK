@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::io::{BufRead, Read, Write};
 use std::{mem, process, ptr};
 use std::any::Any;
@@ -33,6 +34,9 @@ pub(crate) enum WriteResource<'w, 'a, 'k> {
     ACT(())
 }
 
+thread_local! {
+   static WPATH : RefCell<PathMap<u64>> = RefCell::new(PathMap::new());
+}
 // trait JoinLattice  {
 //     fn join(x: Self, y: Self) -> Self;
 // }
@@ -546,8 +550,42 @@ impl Sink for PureSink {
     }
 }
 
+struct WsSink { e: Expr, skip: usize, delta: u64 }
+impl Sink for WsSink {
+    fn new(e: Expr) -> Self {
+        let mut ez = ExprZipper::new(e); ez.next(); ez.next();
+        let max_s = ez.item().err().expect("cnt can not be an expression or variable");
+        let delta: u64 = str::from_utf8(max_s).expect("string encoded numbers for now").parse().expect("a number");
+        WsSink { e, skip: 1 + 1+2 + 1+max_s.len() , delta }
+    }
+
+    fn request(&self) ->  impl Iterator<Item=WriteResourceRequest> {
+        let p = &unsafe { self.e.prefix().unwrap_or_else(|x| { let s = self.e.span(); slice_from_raw_parts(self.e.ptr, s.len() - 1) }).as_ref().unwrap() }[4..];
+        trace!(target: "sink", "count requesting {}", serialize(p));
+        std::iter::once(WriteResourceRequest::BTM(p))
+    }
+
+    fn sink<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k>>>(&mut self, mut it: It, path: &[u8]) where 'a : 'w, 'k : 'w {
+        let current_thread = std::thread::current().id();
+        trace!(target: "sink", "ACT sinking '{}' {:?}", serialize(path), current_thread);
+        WPATH.with_borrow_mut(|wpath| {
+            let WriteResource::BTM(wz) = it.next().unwrap() else { unreachable!() };
+            let mpath = &path[self.skip..];
+            trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
+            trace!(target: "sink", "ws sinking '{}'", serialize(mpath));
+            let curr = wpath.get_val_at(mpath).unwrap_or(&0);
+            wpath.insert(mpath, (curr + self.delta));
+            trace!(target: "sink", "ws finalizing {:?}", wpath.get_val_at(mpath));
+        });
+    }
+
+    fn finalize<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k>>>(&mut self, mut it: It) -> bool where 'a : 'w, 'k : 'w {
+        true
+    }
+}
 
 pub enum ASink { AddSink(AddSink), RemoveSink(RemoveSink), HeadSink(HeadSink), CountSink(CountSink), SumSink(SumSink), ACTSink(ACTSink),
+    WsSink(WsSink),
     #[cfg(feature = "wasm")]
     WASMSink(WASMSink),
     #[cfg(feature = "grounding")]
@@ -572,6 +610,9 @@ impl Sink for ASink {
         } else if unsafe { *e.ptr == item_byte(Tag::Arity(3)) && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(3)) &&
             *e.ptr.offset(2) == b'A' && *e.ptr.offset(3) == b'C' && *e.ptr.offset(4) == b'T' } {
             return ASink::ACTSink(ACTSink::new(e));
+        } else if unsafe { *e.ptr == item_byte(Tag::Arity(3)) && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(2)) &&
+            *e.ptr.offset(2) == b'w' && *e.ptr.offset(3) == b's' } {
+            return ASink::WsSink(WsSink::new(e));
         } else if unsafe { *e.ptr == item_byte(Tag::Arity(3)) && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(4)) &&
             *e.ptr.offset(2) == b'w' && *e.ptr.offset(3) == b'a' && *e.ptr.offset(4) == b's' && *e.ptr.offset(5) == b'm' } {
             #[cfg(feature = "wasm")]
@@ -602,6 +643,7 @@ impl Sink for ASink {
                 ASink::WASMSink(s) => { for i in s.request().into_iter() { yield i } }
                 #[cfg(feature = "grounding")]
                 ASink::PureSink(s) => { for i in s.request().into_iter() { yield i } }
+                ASink::WsSink(s) => {for i in s.request().into_iter() { yield i } }
             }
         }
     }
@@ -617,6 +659,7 @@ impl Sink for ASink {
             ASink::WASMSink(s) => { s.sink(it, path) }
             #[cfg(feature = "grounding")]
             ASink::PureSink(s) => { s.sink(it, path) }
+            ASink::WsSink(s) => { s.sink(it, path) }
         }
     }
 
@@ -632,6 +675,7 @@ impl Sink for ASink {
             ASink::WASMSink(s) => { s.finalize(it) }
             #[cfg(feature = "grounding")]
             ASink::PureSink(s) => { s.finalize(it) }
+            ASink::WsSink(s) => { s.finalize(it) }
         }
     }
 }
