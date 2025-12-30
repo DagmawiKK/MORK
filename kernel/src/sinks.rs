@@ -9,7 +9,7 @@ use std::mem::MaybeUninit;
 use std::ops::{Coroutine, CoroutineState};
 use std::pin::Pin;
 use std::ptr::{addr_of, null, null_mut, slice_from_raw_parts, slice_from_raw_parts_mut};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::task::Poll;
 use std::time::Instant;
 use futures::StreamExt;
@@ -22,7 +22,10 @@ use pathmap::zipper::*;
 use mork_frontend::json_parser::Transcriber;
 use log::*;
 use pathmap::PathMap;
+use weighted_atom_sweep::{AtomHeader, KernelOperation, SweepTransversalEngine, WeightedMap};
 use crate::space::ACT_PATH;
+use crate::weightedsweep::{ U64AtomHeader, Traverse, init_weight };
+use weighted_atom_sweep::WeightedAtomSweep;
 
 pub(crate) enum WriteResourceRequest {
     BTM(&'static [u8]),
@@ -562,21 +565,50 @@ impl Sink for WsSink {
     fn request(&self) ->  impl Iterator<Item=WriteResourceRequest> {
         let p = &unsafe { self.e.prefix().unwrap_or_else(|x| { let s = self.e.span(); slice_from_raw_parts(self.e.ptr, s.len() - 1) }).as_ref().unwrap() }[4..];
         trace!(target: "sink", "count requesting {}", serialize(p));
+        if let Some(wsweep) = crate::weightedsweep::GLOBAL_WS_SWEEP.get() {
+            trace!(target: "sink", "WSP available");
+        } else {
+            let wsp = init_weight();
+            crate::weightedsweep::GLOBAL_WS_SWEEP.set(Arc::new(wsp));
+            trace!(target: "sink", "create wsp");
+        }
         std::iter::once(WriteResourceRequest::BTM(p))
     }
 
     fn sink<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k>>>(&mut self, mut it: It, path: &[u8]) where 'a : 'w, 'k : 'w {
         let current_thread = std::thread::current().id();
         trace!(target: "sink", "ACT sinking '{}' {:?}", serialize(path), current_thread);
-        WPATH.with_borrow_mut(|wpath| {
+        if let Some(wsweep) = crate::weightedsweep::GLOBAL_WS_SWEEP.get() {
             let WriteResource::BTM(wz) = it.next().unwrap() else { unreachable!() };
             let mpath = &path[self.skip..];
+            let wpath = &wsweep.map.inner;
             trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
             trace!(target: "sink", "ws sinking '{}'", serialize(mpath));
-            let curr = wpath.get_val_at(mpath).unwrap_or(&0);
-            wpath.insert(mpath, (curr + self.delta));
-            trace!(target: "sink", "ws finalizing {:?}", wpath.get_val_at(mpath));
-        });
+            let curr = match wpath.read_zipper_at_path(mpath) {
+                Ok(reader) => {
+                    let U64AtomHeader(curr) = reader.val().unwrap_or(&U64AtomHeader(0));
+                    curr.clone()
+                }
+                Err(conflict) => {
+                    trace!(target: "sink", "No reader Zipper create at {:?} err: {:?}", mpath, conflict);
+                    return;
+                }
+            };
+            match wpath.write_zipper_at_exclusive_path(mpath) {
+                Ok(mut write_zipper) => {
+                    trace!(target: "sink", "write value at zipper location {:?} {:?}", serialize(mpath), curr);
+                    write_zipper.set_val(U64AtomHeader(curr + self.delta));
+                    wpath.cleanup_write_zipper(write_zipper);
+                }
+                Err(conflict) => {
+                    trace!(target: "sink", "Path conflict when creating write zipper for {:?}: {:?}", serialize(mpath), conflict);
+                    return;
+                }
+            }
+            trace!(target: "sink", "ws finalizing {:?}", wpath.read_zipper_at_path(mpath).unwrap().val().unwrap_or(&U64AtomHeader(0)));
+        } else {
+            trace!(target: "sink", "create wsp");
+        };
     }
 
     fn finalize<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k>>>(&mut self, mut it: It) -> bool where 'a : 'w, 'k : 'w {
