@@ -29,3 +29,6 @@ gxhash = {version="3.4.1", git="https://github.com/luketpeterson/gxhash/"} # for
 [workspace.dependencies.pathmap]
 path = "../PathMap"
 features = ["jemalloc", "arena_compact"]
+
+[workspace.dependencies.weighted-atom-sweep]
+path = "../weighted-atom-sweep"
