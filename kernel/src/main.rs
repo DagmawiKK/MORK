@@ -5,6 +5,7 @@ use mork_expr::{item_byte, serialize, Tag};
 use pathmap::PathMap;
 use pathmap::zipper::{Zipper, ZipperAbsolutePath, ZipperIteration, ZipperMoving};
 use std::collections::{BTreeSet, HashSet};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -18,6 +19,9 @@ use base64::Engine;
 use serde::{Serialize, Deserialize};
 use clap::{Args, Parser as CLAParser, Subcommand, ValueEnum};
 use clap::builder::TypedValueParser;
+use weighted_atom_sweep::{ WeightedMap, WeightedAtomSweep, WeightedAtomSweepSettings };
+mod weightedsweep;
+use weightedsweep::{ Traverse, U64AtomHeader, Ops, init_weight, GLOBAL_WS_SWEEP };
 
 
 /*fn main() {
@@ -3971,7 +3975,14 @@ enum Commands {
         instrumentation: usize,
         input_path: String,
         output_path: Option<String>
-    }
+    },
+    WS {
+        input_path: String, 
+    },
+    // WSAsync {
+    //     input_path: String,
+    //     iterations: Option<usize>,
+    // }
 }
 
 
@@ -3996,6 +4007,7 @@ fn main() {
     // return;
 
     let args = Cli::parse();
+
 
     match args.command {
         Commands::Bench { only } => {
@@ -4081,6 +4093,9 @@ fn main() {
         Commands::Run { input_path, steps, instrumentation, output_path } => {
             #[cfg(debug_assertions)]
             println!("WARNING running in debug, if unintentional, build with --release");
+            
+            let wsp = init_weight();
+            GLOBAL_WS_SWEEP.set(Arc::new(wsp));
             let mut s = Space::new();
             let f = std::fs::File::open(&input_path).unwrap();
             let mmapf = unsafe { memmap2::Mmap::map(&f).unwrap() };
@@ -4168,6 +4183,28 @@ fn main() {
                 (_, _) => { panic!("unsupported conversion") }
             }
         }
+        Commands::WS { input_path } => {
+            println!("🚀 Running WeightedAtomSweep integration tests...");
+            
+            // Run our test suite
+            // Note: In a real application, you'd use a proper test framework
+            mork::weightedsweep_tests::tests::test_weighted_atom_sweep_basic_integration();
+            // mork::weightedsweep_tests::tests::test_wssink_weighted_map_integration();
+            mork::weightedsweep_tests::tests::test_traversal_engine_functionality();
+            mork::weightedsweep_tests::tests::test_concurrent_weighted_map_access();
+            mork::weightedsweep_tests::tests::test_full_weighted_atom_sweep_integration();
+            
+            println!("✅ All WeightedAtomSweep tests completed!");
+        }
+        // Commands::WSAsync { input_path, iterations } => {
+        //     println!("🚀 Running async WeightedAtomSweep test...");
+        //     
+        //     if let Err(e) = mork::weightedsweep_tests::tests::test_async_weighted_atom_sweep().await {
+        //         eprintln!("❌ Async WeightedAtomSweep test failed: {:?}", e);
+        //     } else {
+        //         println!("✅ Async WeightedAtomSweep test completed successfully!");
+        //     }
+        // }
     }
     return;
 }

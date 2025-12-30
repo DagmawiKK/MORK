@@ -6,3 +6,5 @@
 pub mod space;
 mod sources;
 mod sinks;
+pub mod weightedsweep;
+pub mod weightedsweep_tests;
