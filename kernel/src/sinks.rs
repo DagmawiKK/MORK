@@ -22,7 +22,7 @@ use pathmap::zipper::*;
 use mork_frontend::json_parser::Transcriber;
 use log::*;
 use pathmap::PathMap;
-use weighted_atom_sweep::{AtomHeader, KernelOperation, SweepTransversalEngine, WeightedMap, WeightedAtomSweep};
+use weighted_atom_sweep::{AtomHeader, KernelOperation, SweepTransversalEngine, WeightedMap, WeightedAtomSweep, WeightedValue};
 use crate::space::ACT_PATH;
 use crate::weightedsweep::{ U64AtomHeader, Traverse, init_weight };
 
@@ -583,9 +583,9 @@ impl Sink for WsSink {
             let wmap = &wsweep.map;
             trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
             trace!(target: "sink", "ws sinking '{}'", serialize(mpath));
-            let U64AtomHeader(curr) = &wmap.get_val(mpath).unwrap_or(U64AtomHeader(0));
-            &wmap.set_val(mpath, U64AtomHeader(curr + self.delta));
-            trace!(target: "sink", "ws finalizing {:?}", &wmap.get_val(mpath).unwrap_or(U64AtomHeader(0)));
+            let curr = &wmap.get_val(mpath).unwrap_or(WeightedValue::<U64AtomHeader>::default()).val.0;
+            &wmap.set_weighted_val(mpath, U64AtomHeader(curr + self.delta));
+            trace!(target: "sink", "ws finalizing {:?}", &wmap.get_val(mpath).unwrap_or(WeightedValue::<U64AtomHeader>::default()).val.0);
         } else {
             trace!(target: "sink", "create wsp");
         };
