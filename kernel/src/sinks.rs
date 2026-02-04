@@ -36,7 +36,7 @@ pub(crate) enum WriteResourceRequest {
 }
 
 pub(crate) enum WriteResource<'w, 'a, 'k> {
-    BTM(&'w mut WriteZipperTracked<'a, 'k, ()>),
+    BTM(&'w mut WriteZipperTracked<'a, 'k, i32>),
     ACT(()),
     Z3(subprocess::Popen)
 }
@@ -91,7 +91,7 @@ impl Sink for CompatSink {
         trace!(target: "sink", "+ (compat) at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
         trace!(target: "sink", "+ (compat) sinking '{}'", serialize(mpath));
         wz.move_to_path(mpath);
-        self.changed |= wz.set_val(()).is_none();
+        self.changed |= wz.set_val(0).is_none();
     }
     fn finalize<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k>>>(&mut self, it: It) -> bool where 'a : 'w, 'k : 'w {
         trace!(target: "sink", "+ (compat) finalizing");
@@ -113,7 +113,7 @@ impl Sink for AddSink {
         trace!(target: "sink", "+ at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
         trace!(target: "sink", "+ sinking '{}'", serialize(mpath));
         wz.move_to_path(mpath);
-        self.changed |= wz.set_val(()).is_none();
+        self.changed |= wz.set_val(0).is_none();
     }
     fn finalize<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k>>>(&mut self, it: It) -> bool where 'a : 'w, 'k : 'w {
         trace!(target: "sink", "+ finalizing");
@@ -170,7 +170,7 @@ impl Sink for USink {
                 trace!(target: "sink", "U unified expression '{}'", serialize(buf));
                 let WriteResource::BTM(wz) = it.next().unwrap() else { unreachable!() };
                 wz.move_to_path(&buf[wz.root_prefix_path().len()..]);
-                wz.set_val(());
+                wz.set_val(0);
                 true
             }
         }
@@ -215,7 +215,7 @@ impl Sink for AUSink {
                 trace!(target: "sink", "AU anti-unified expression '{}'", serialize(&buf[..self.last]));
                 let WriteResource::BTM(wz) = it.next().unwrap() else { unreachable!() };
                 wz.move_to_path(&buf[wz.root_prefix_path().len()..self.last]);
-                wz.set_val(());
+                wz.set_val(0);
                 true
             }
         }
@@ -501,7 +501,7 @@ impl Sink for CountSink {
                     let fixed = &prz.path()[..prz.path().len()-(1+cnt_str.len())];
                     trace!(target: "sink", "fixed guard {}", serialize(fixed));
                     wz.move_to_path(fixed);
-                    wz.set_val(());
+                    wz.set_val(0);
                     changed |= true;
                 }
                 prz.ascend(descended + 1);
@@ -510,7 +510,7 @@ impl Sink for CountSink {
                 let ignored = &prz.path()[..prz.path().len()-1];
                 trace!(target: "sink", "ignored guard {}", serialize(ignored));
                 wz.move_to_path(ignored);
-                wz.set_val(());
+                wz.set_val(0);
                 changed |= true;
                 prz.ascend_byte();
             } 
@@ -526,7 +526,7 @@ impl Sink for CountSink {
                     unsafe { buffer.set_len(oz.loc) }
                     trace!(target: "sink", "ref guard subs '{:?}'", serialize(&buffer[..oz.loc]));
                     wz.move_to_path(&buffer[wz.root_prefix_path().len()..oz.loc]);
-                    wz.set_val(());
+                    wz.set_val(0);
                     changed |= true
                 }
                 prz.ascend_byte();
@@ -590,7 +590,7 @@ impl Sink for HashSink {
                         let fixed = &prz.origin_path()[..prz.origin_path().len()-(1+size as usize)];
                         trace!(target: "sink", "fixed payload {}", serialize(fixed));
                         wz.move_to_path(fixed);
-                        wz.set_val(());
+                        wz.set_val(0);
                         changed |= true;
                     }
 
@@ -603,7 +603,7 @@ impl Sink for HashSink {
                 let ignored = &prz.path()[..prz.path().len()-1];
                 trace!(target: "sink", "ignored guard {}", serialize(ignored));
                 wz.move_to_path(ignored);
-                wz.set_val(());
+                wz.set_val(0);
                 changed |= true;
                 prz.ascend_byte();
             }
@@ -622,7 +622,7 @@ impl Sink for HashSink {
                     unsafe { buffer.set_len(oz.loc) }
                     trace!(target: "sink", "hash ref guard subs '{:?}'", serialize(&buffer[..oz.loc]));
                     wz.move_to_path(&buffer[wz.root_prefix_path().len()..oz.loc]);
-                    wz.set_val(());
+                    wz.set_val(0);
                     changed |= true
                 }
                 prz.ascend_byte();
@@ -693,7 +693,7 @@ impl Sink for AndSink {
                         let fixed = &prz.origin_path()[..prz.origin_path().len()-(1+size as usize)];
                         trace!(target: "sink", "fixed payload {}", serialize(fixed));
                         wz.move_to_path(fixed);
-                        wz.set_val(());
+                        wz.set_val(0);
                         changed |= true;
                     }
 
@@ -706,7 +706,7 @@ impl Sink for AndSink {
                 let ignored = &prz.path()[..prz.path().len()-1];
                 trace!(target: "sink", "ignored guard {}", serialize(ignored));
                 wz.move_to_path(ignored);
-                wz.set_val(());
+                wz.set_val(0);
                 changed |= true;
                 prz.ascend_byte();
             }
@@ -733,7 +733,7 @@ impl Sink for AndSink {
                     unsafe { buffer.set_len(oz.loc) }
                     trace!(target: "sink", "and ref guard subs '{:?}'", serialize(&buffer[..oz.loc]));
                     wz.move_to_path(&buffer[wz.root_prefix_path().len()..oz.loc]);
-                    wz.set_val(());
+                    wz.set_val(0);
                     changed |= true
                 }
                 prz.ascend_byte();
@@ -802,7 +802,7 @@ impl Sink for SumSink {
                         let fixed = &prz.origin_path()[..prz.origin_path().len()-(1+size as usize)];
                         trace!(target: "sink", "fixed payload {}", serialize(fixed));
                         wz.move_to_path(fixed);
-                        wz.set_val(());
+                        wz.set_val(0);
                         changed |= true;
                     }
 
@@ -815,7 +815,7 @@ impl Sink for SumSink {
                 let ignored = &prz.path()[..prz.path().len()-1];
                 trace!(target: "sink", "ignored guard {}", serialize(ignored));
                 wz.move_to_path(ignored);
-                wz.set_val(());
+                wz.set_val(0);
                 changed |= true;
                 prz.ascend_byte();
             }
@@ -842,7 +842,7 @@ impl Sink for SumSink {
                     unsafe { buffer.set_len(oz.loc) }
                     trace!(target: "sink", "ref guard subs '{:?}'", serialize(&buffer[..oz.loc]));
                     wz.move_to_path(&buffer[wz.root_prefix_path().len()..oz.loc]);
-                    wz.set_val(());
+                    wz.set_val(0);
                     changed |= true
                 }
                 prz.ascend_byte();
@@ -920,7 +920,7 @@ impl Sink for PureSink {
                 let ignored = &prz.path()[..prz.path().len()-1];
                 trace!(target: "sink", "ignored guard {}", serialize(ignored));
                 wz.move_to_path(ignored);
-                wz.set_val(());
+                wz.set_val(0);
                 changed |= true;
                 prz.ascend_byte();
             }
@@ -948,7 +948,7 @@ impl Sink for PureSink {
                         unsafe { buffer.set_len(oz.loc) }
                         trace!(target: "sink", "ref guard subs '{:?}'", serialize(&buffer[..oz.loc]));
                         wz.move_to_path(&buffer[wz.root_prefix_path().len()..oz.loc]);
-                        wz.set_val(());
+                        wz.set_val(0);
                         changed |= true;
                         self.scope.return_alloc(res);
                     }
