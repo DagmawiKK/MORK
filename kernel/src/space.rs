@@ -1038,14 +1038,14 @@ impl Space {
             factors.push(src.source(src.request().map(|request| {
                 match request {
                     ResourceRequest::BTM(prefix) => { Resource::BTM(btm.read_zipper_at_path(prefix)) }
-                    ResourceRequest::ACT(name) => {
-                        let act = unsafe { mmaps_ptr.as_mut().unwrap() }.entry(name).or_insert_with(|| {
-                            trace!(target: "query_multi_i", "open new ACT {}", name);
-                            ArenaCompactTree::open_mmap(format!("{ACT_PATH}{name}.act")).unwrap()
-                        });
-                        trace!(target: "query_multi_i", "taking RZ of {}", name);
-                        Resource::ACT(act.read_zipper())
-                    }
+                    // ResourceRequest::ACT(name) => {
+                    //     let act = unsafe { mmaps_ptr.as_mut().unwrap() }.entry(name).or_insert_with(|| {
+                    //         trace!(target: "query_multi_i", "open new ACT {}", name);
+                    //         ArenaCompactTree::open_mmap(format!("{ACT_PATH}{name}.act")).unwrap()
+                    //     });
+                    //     trace!(target: "query_multi_i", "taking RZ of {}", name);
+                    //     Resource::ACT(act.read_zipper())
+                    // }
                 }
             })));
             srcs.push(src);

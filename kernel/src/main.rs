@@ -2913,7 +2913,7 @@ fn sink_wasm_add() {
             e.extend_from_slice(is.as_bytes());
             e.push(item_byte(Tag::SymbolSize(4)));
             e.extend_from_slice(((options.len() as i32)*i + (k as i32)).to_be_bytes().as_slice());
-            s.btm.insert(&e[..], ());
+            s.btm.insert(&e[..], 0);
         }
     }
     s.add_all_sexpr(&args[..]).unwrap();
