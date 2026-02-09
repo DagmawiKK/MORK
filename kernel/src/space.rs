@@ -22,6 +22,7 @@ use pathmap::zipper::*;
 use pathmap::arena_compact::ArenaCompactTree;
 use pathmap::PathMap;
 use mork_frontend::json_parser::Transcriber;
+use crate::traversal::*;
 use log::*;
 
 use crate::sources::AFactor;
