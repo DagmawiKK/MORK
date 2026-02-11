@@ -1,14 +1,14 @@
 use std::collections::HashSet;
 use std::error::Error;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use crate::weightedsweep::{Ops, Traverse, U64AtomHeader};
+use crate::weightedsweep::{ChunkedPQTraverse, Ops, Traverse, U64AtomHeader};
 use mork_interning::SharedMappingHandle;
+use pathmap::PathMap;
 use pathmap::morphisms::Catamorphism;
 use pathmap::zipper::{ZipperCreation, ZipperIteration, ZipperMoving, ZipperValues, ZipperWriting};
-use pathmap::PathMap;
 use weighted_atom_sweep::{
     AtomHeader, AtomPosition, KernelOperation, Operation, OperationObserver,
     SweepTransversalEngine, TransversalEngine, WeightedAtomSweep, WeightedAtomSweepSettings,
@@ -58,7 +58,6 @@ pub mod tests {
         let mut test_map = PathMap::<WeightedValue<U64AtomHeader>>::new();
         let mut test_map_z = test_map.into_zipper_head(&[]);
         let map = WeightedMap::<U64AtomHeader>::new(test_map_z);
-        
 
         // Insert some test atoms with weights
         let path1 = vec![1, 2, 3];
@@ -144,7 +143,7 @@ pub mod tests {
         // Create test map
         let mut map = PathMap::<WeightedValue<U64AtomHeader>>::new();
         let mut test_map_z = map.into_zipper_head(&[]);
-        let mut test_map = WeightedMap::<U64AtomHeader>::new(test_map_z); 
+        let mut test_map = WeightedMap::<U64AtomHeader>::new(test_map_z);
         test_map.set_weighted_val(&[1, 2, 3], U64AtomHeader(5));
         test_map.set_weighted_val(&[4, 5, 6], U64AtomHeader(2));
 
@@ -234,7 +233,6 @@ pub mod tests {
         let map = PathMap::<WeightedValue<U64AtomHeader>>::new();
         let map_z = map.into_zipper_head(&[]);
         let test_map = WeightedMap::<U64AtomHeader>::new(map_z);
-
 
         test_map.set_weighted_val(&[1, 2, 3], U64AtomHeader(10));
         test_map.set_weighted_val(&[1, 2, 4], U64AtomHeader(20));
@@ -380,7 +378,6 @@ pub mod tests {
         let map_z = map.into_zipper_head(&[]);
         let mut test_map = WeightedMap::<U64AtomHeader>::new(map_z);
 
-
         // Create larger dataset
         for i in 0..100 {
             let path = vec![(i % 10) as u8, ((i / 10) % 10) as u8, (i % 5) as u8];
@@ -491,5 +488,213 @@ pub mod tests {
 
         println!("✅ Found {} values during iteration", count);
         println!("✅ WeightedMap API test completed!");
+    }
+}
+
+#[cfg(test)]
+mod chunked_pq_test {
+    use super::*;
+    use pathmap::zipper::ZipperForking;
+    use pathmap::{PathMap, zipper};
+    use std::iter::zip;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+    use weighted_atom_sweep::{TransversalEngine, WeightedAtomSweepSettings, WeightedMap};
+
+    #[test]
+    fn test_basic_collection() {
+        let mut map = PathMap::<WeightedValue<U64AtomHeader>>::new();
+        let mut map_z = map.into_zipper_head(&[]);
+        let map = WeightedMap::<U64AtomHeader>::new(map_z);
+
+        map.set_weighted_val(&[1, 1], U64AtomHeader(10));
+        map.set_weighted_val(&[1, 2], U64AtomHeader(20));
+        map.set_weighted_val(&[2, 1], U64AtomHeader(30));
+        map.set_weighted_val(&[2, 2], U64AtomHeader(40));
+
+        let traverse = ChunkedPQTraverse::new(2);
+
+        let zipper = map.read_zipper_at_borrowed_path(&[]).unwrap();
+
+        let atom1 = traverse.next_atom(zipper.clone()).unwrap();
+        let atom2 = traverse.next_atom(zipper.clone()).unwrap();
+        let atom3 = traverse.next_atom(zipper.clone()).unwrap();
+        let atom4 = traverse.next_atom(zipper.clone()).unwrap();
+        assert_eq!(atom1.len(), 2, "Atom 1 should have length 2");
+        assert_eq!(atom2.len(), 2, "Atom 2 should have length 2");
+        assert_eq!(atom3.len(), 2, "Atom 3 should have length 2");
+        assert_eq!(atom4.len(), 2, "Atom 4 should have length 2");
+    }
+
+    #[test]
+    fn test_priority_ordering() {
+        let mut test_map = PathMap::<WeightedValue<U64AtomHeader>>::new();
+        let mut test_map_z = test_map.into_zipper_head(&[]);
+        let map = WeightedMap::<U64AtomHeader>::new(test_map_z);
+
+        map.set_weighted_val(&[1, 1], U64AtomHeader(10)).unwrap();
+        map.set_weighted_val(&[2, 1], U64AtomHeader(100)).unwrap();
+        map.set_weighted_val(&[3, 1], U64AtomHeader(50)).unwrap();
+
+        let traverse = ChunkedPQTraverse::new(2);
+        let zipper = map.read_zipper_at_borrowed_path(&[]).unwrap();
+
+        let first = traverse.next_atom(zipper).unwrap();
+        assert_eq!(
+            first,
+            vec![2, 1],
+            "Heighest weight atoom should be returned first"
+        );
+    }
+
+    #[test]
+    fn test_empty_trie() {
+        let test_map = PathMap::<WeightedValue<U64AtomHeader>>::new();
+        let test_map_z = test_map.into_zipper_head(&[]);
+        let map = WeightedMap::<U64AtomHeader>::new(test_map_z);
+
+        let traverse = ChunkedPQTraverse::new(2);
+        let zipper = map.read_zipper_at_borrowed_path(&[]).unwrap();
+
+        let atom = traverse.next_atom(zipper).unwrap();
+
+        assert_eq!(
+            atom,
+            Vec::<u8>::new(),
+            "Empty trie should return empty path"
+        );
+    }
+
+    #[test]
+    fn test_depth_boundaries() {
+        let mut test_map = PathMap::<WeightedValue<U64AtomHeader>>::new();
+        let mut test_map_z = test_map.into_zipper_head(&[]);
+        let map = WeightedMap::<U64AtomHeader>::new(test_map_z);
+
+        map.set_weighted_val(&[1, 1, 1, 1], U64AtomHeader(10))
+            .unwrap();
+        map.set_weighted_val(&[2, 2, 2, 2], U64AtomHeader(20))
+            .unwrap();
+
+        let traverse_d2 = ChunkedPQTraverse::new(2);
+        let zipper_d2 = map.read_zipper_at_borrowed_path(&[]).unwrap();
+        let atom_d2 = traverse_d2.next_atom(zipper_d2).unwrap();
+        assert_eq!(
+            atom_d2,
+            Vec::<u8>::new(),
+            "Depth 2 should return empty for atoms at depth 4"
+        );
+
+        let traverse_d4 = ChunkedPQTraverse::new(4);
+        let zipper_d4 = map.read_zipper_at_borrowed_path(&[]).unwrap();
+        let atom_d4 = traverse_d4.next_atom(zipper_d4).unwrap();
+        assert_eq!(atom_d4.len(), 4, "Depth 4 should return atoms of length 4");
+    }
+
+    #[test]
+    fn test_refresh() {
+        let mut test_map = PathMap::<WeightedValue<U64AtomHeader>>::new();
+        let mut test_map_z = test_map.into_zipper_head(&[]);
+        let map = WeightedMap::<U64AtomHeader>::new(test_map_z);
+
+        map.set_weighted_val(&[1, 1], U64AtomHeader(10)).unwrap();
+        map.set_weighted_val(&[2, 1], U64AtomHeader(10)).unwrap();
+        map.set_weighted_val(&[3, 1], U64AtomHeader(30)).unwrap();
+        map.set_weighted_val(&[4, 1], U64AtomHeader(40)).unwrap();
+
+        let traverse = ChunkedPQTraverse::new(2);
+        let zipper = map.read_zipper_at_borrowed_path(&[]).unwrap();
+
+        let atom1 = traverse.next_atom(zipper.clone()).unwrap();
+        let atom2 = traverse.next_atom(zipper.clone()).unwrap();
+
+        traverse.refresh(&zipper);
+
+        let atom_new = traverse.next_atom(zipper.clone()).unwrap();
+        assert!(atom_new == vec![3, 1] || atom_new == vec![4, 1]);
+    }
+
+    #[test]
+    fn test_single_atom() {
+        let test_map = PathMap::<WeightedValue<U64AtomHeader>>::new();
+        let test_map_z = test_map.into_zipper_head(&[]);
+        let map = WeightedMap::<U64AtomHeader>::new(test_map_z);
+
+        map.set_weighted_val(&[1, 1], U64AtomHeader(10)).unwrap();
+
+        let traverse = ChunkedPQTraverse::new(2);
+        let zipper = map.read_zipper_at_borrowed_path(&[]).unwrap();
+
+        let atom1 = traverse.next_atom(zipper.clone()).unwrap();
+        let atom2 = traverse.next_atom(zipper.clone()).unwrap();
+
+        assert_eq!(atom1, vec![1, 1]);
+        assert_eq!(atom2, vec![1, 1]); // TODO: maybe don't recollect on empty heap 
+    }
+
+    #[test]
+    fn test_same_weight() {
+        let mut test_map = PathMap::<WeightedValue<U64AtomHeader>>::new();
+        let mut test_map_z = test_map.into_zipper_head(&[]);
+        let map = WeightedMap::<U64AtomHeader>::new(test_map_z);
+
+        map.set_weighted_val(&[1, 1], U64AtomHeader(50)).unwrap();
+        map.set_weighted_val(&[1, 1], U64AtomHeader(50)).unwrap();
+        map.set_weighted_val(&[1, 1], U64AtomHeader(50)).unwrap();
+
+        let traverse = ChunkedPQTraverse::new(2);
+        let zipper = map.read_zipper_at_borrowed_path(&[]).unwrap();
+
+        let atoms: Vec<_> = (0..3)
+            .filter_map(|_| traverse.next_atom(zipper.clone()).ok())
+            .take(5)
+            .collect();
+
+        assert_eq!(atoms.len(), 3);
+    }
+
+    #[test]
+    fn test_wide_trie() {
+        let mut test_map = PathMap::<WeightedValue<U64AtomHeader>>::new();
+        let mut test_map_z = test_map.into_zipper_head(&[]);
+        let map = WeightedMap::<U64AtomHeader>::new(test_map_z);
+
+        for i in 1..=10 {
+            map.set_weighted_val(&[i, 1], U64AtomHeader(i as u64))
+                .unwrap();
+        }
+
+        let traverse = ChunkedPQTraverse::new(2);
+        let zipper = map.read_zipper_at_borrowed_path(&[]).unwrap();
+
+        let atoms: Vec<_> = (0..10)
+            .filter_map(|_| traverse.next_atom(zipper.clone()).ok())
+            .take(15)
+            .collect();
+
+        assert_eq!(atoms.len(), 10);
+    }
+
+    #[test]
+    fn test_descending_order() {
+        let mut test_map = PathMap::<WeightedValue<U64AtomHeader>>::new();
+        let mut test_map_z = test_map.into_zipper_head(&[]);
+        let map = WeightedMap::<U64AtomHeader>::new(test_map_z);
+
+        map.set_weighted_val(&[1, 1], U64AtomHeader(100)).unwrap();
+        map.set_weighted_val(&[2, 1], U64AtomHeader(80)).unwrap();
+        map.set_weighted_val(&[3, 1], U64AtomHeader(60)).unwrap();
+        map.set_weighted_val(&[4, 1], U64AtomHeader(40)).unwrap();
+        map.set_weighted_val(&[5, 1], U64AtomHeader(20)).unwrap();
+
+        let traverse = ChunkedPQTraverse::new(2);
+        let zipper = map.read_zipper_at_borrowed_path(&[]).unwrap();
+
+        let first = traverse.next_atom(zipper.clone()).unwrap();
+        assert_eq!(first, vec![1, 1]);
+
+        let second = traverse.next_atom(zipper.clone()).unwrap();
+        assert_eq!(second, vec![2, 1]);
     }
 }
