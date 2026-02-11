@@ -556,7 +556,7 @@ impl Sink for WsSink {
 
     fn sink<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k>>>(&mut self, mut it: It, path: &[u8]) where 'a : 'w, 'k : 'w {
         let WriteResource::BTM(wz) = it.next().unwrap() else { unreachable!() };
-        let mpath = &path[self.skip..];
+        let mpath = &path[self.skip+wz.root_prefix_path().len()..];
         wz.move_to_path(mpath);
         trace!(target: "sink", "WS at '{}' sinking raw '{}' mpath '{}'", serialize(wz.root_prefix_path()), serialize(path), serialize(mpath));
         // trace!(target: "sink", "WS sinking '{}'", serialize(mpath));
