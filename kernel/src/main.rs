@@ -4677,6 +4677,13 @@ enum Commands {
         instrumentation: usize,
         input_path: String,
         output_path: Option<String>
+    },
+    #[command(arg_required_else_help = true)]
+    WS {
+        input_path: String,
+        #[arg(long, default_value_t = 1000000000000000)]
+        steps: usize,
+        output_path: Option<String>,
     }
 }
 
@@ -4929,6 +4936,35 @@ fn main() {
                 //     jsonl_upaths(input_path, some_output_path);
                 // }
                 (_, _) => { panic!("unsupported conversion") }
+            }
+        }
+        Commands::WS { input_path, steps, output_path } => {
+            #[cfg(debug_assertions)]
+            println!("WARNING running in debug, if unintentional, build with --release");
+            let mut s = Space::new();
+            let f = std::fs::File::open(&input_path).unwrap();
+            let mmapf = unsafe { memmap2::Mmap::map(&f).unwrap() };
+
+            // 1. read data from relevant files 
+            s.add_all_sexpr(&*mmapf);
+            let t0 = Instant::now();
+
+            // 2. add random weights to the data via WS Sink
+            let mut performed = s.metta_calculus(steps);
+
+            // 3. retrive and operate arms
+            
+             
+
+            if output_path.is_none() {
+                let mut v = vec![];
+                s.dump_all_sexpr(&mut v).unwrap();
+                let res = String::from_utf8_lossy_owned(v);
+                println!("result:\n{res}");
+            } else {
+                let f = std::fs::File::create(&output_path.unwrap()).unwrap();
+                let mut w = std::io::BufWriter::new(f);
+                s.dump_all_sexpr(&mut w).unwrap();
             }
         }
     }
