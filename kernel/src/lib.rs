@@ -8,4 +8,4 @@ pub mod space;
 mod sources;
 mod sinks;
 mod pure;
-mod traversal;
+pub mod traversal;

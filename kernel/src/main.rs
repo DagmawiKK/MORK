@@ -2,10 +2,11 @@
 
 use mork::{expr, prefix, sexpr};
 use mork::space::{transitions, unifications, writes, Space, ACT_PATH};
+use mork::traversal::*;
 use mork_frontend::bytestring_parser::Parser;
 use mork_expr::{item_byte, serialize, SourceItem, Tag};
 use pathmap::PathMap;
-use pathmap::zipper::{Zipper, ZipperAbsolutePath, ZipperIteration, ZipperMoving};
+use pathmap::zipper::{Zipper, ZipperAbsolutePath, ZipperCreation, ZipperIteration, ZipperMoving};
 use std::collections::{BTreeSet, HashSet};
 use std::time::Instant;
 use std::ffi::OsStr;
@@ -4952,7 +4953,25 @@ fn main() {
             // 2. add random weights to the data via WS Sink
             let mut performed = s.metta_calculus(steps);
 
+            let t = s.btm.zipper_head();
+            let atom_path = next_atom(t.read_zipper_at_path(&[]).unwrap()).unwrap();
+            print!("atom {:?}", String::from_utf8_lossy_owned(atom_path.to_vec()));
+            s.btm.remove(&atom_path);
+            
             // 3. retrive and operate arms
+            // std::thread::spawn(move || {
+            //     // get access to a read zipper
+            //     atom_sender.send(atom_path).unwrap();
+            // });
+            //
+            // // handle traversed atom
+            // std::thread::spawn(move || {
+            //     // get access to a read zipper
+            //     let atom = atom_receiver.recv().unwrap(); 
+            //
+            //     print!("atom {:?}", String::from_utf8_lossy_owned(atom.to_vec()));
+            // });
+
             
              
 
