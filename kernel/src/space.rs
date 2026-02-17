@@ -160,6 +160,11 @@ fn coreferential_transition<Z : ZipperMoving + Zipper + ZipperAbsolutePath + Zip
                 Tag::VarRef(i) => {
                     // let addition = if e.n == 0 && references[i as usize] != u32::MAX {
                     let addition = if e.n == 0 {
+                        if i as usize >= references.len() {
+                            trace!(target: "coref trans", "i {i} #references {}", references.len());
+                            stack.push(e);
+                            return;
+                        }
                         trace!(target: "coref trans", "varref {i} at {} pushing {}", references[i as usize], serialize(&loc.path()[references[i as usize] as usize..]));
                         trace!(target: "coref trans", "varref {i} {:?}", &loc.path()[references[i as usize] as usize..]);
                         // trace!(target: "coref trans", "varref against {:?}", loc.child_mask());
@@ -1058,6 +1063,7 @@ impl Space {
                 Self::query_multi_raw(&mut prz, &pat_args[1..], effect)
             }
             primary => {
+                trace!(target: "query_multi_i", "PZG of {:?}", factors.len() + 1);
                 let mut prz = ProductZipperG::new(primary, &mut factors[..]);
                 prz.reserve_buffers(1 << 32, 32);
                 Self::query_multi_raw(&mut prz, &pat_args[1..], effect)
@@ -1198,33 +1204,28 @@ impl Space {
         out
     }
 
-    // pub fn prefix_subsumption_resources(prefixes: &[crate::sinks::WriteResourceRequest]) -> Vec<usize> {
-    //     let n = prefixes.len();
-    //     let mut out = Vec::with_capacity(n);
-    //
-    //     for (i, &cur) in prefixes.iter().enumerate() {
-    //         let mut best_idx = i;
-    //         let mut best_len = cur.len();
-    //
-    //         for (j, &cand) in prefixes.iter().enumerate() {
-    //             // cand \/ cur == cand
-    //             // x <= y  <=>  (x \/ y) == y
-    //             if pathmap::utils::find_prefix_overlap(cand, cur) == cand.len() {
-    //                 let cand_len = cand.len();
-    //
-    //                 // cand < best || (cand == best &&)
-    //                 if cand_len < best_len || (cand_len == best_len && j < best_idx) {
-    //                     best_idx = j;
-    //                     best_len = cand_len;
-    //                 }
-    //             }
-    //         }
-    //
-    //         out.push(best_idx);
-    //     }
-    //
-    //     out
-    // }
+    pub fn prefix_subsumption_resources(requests: &[crate::sinks::WriteResourceRequest]) -> Vec<usize> {
+        let n = requests.len();
+        let mut out = Vec::with_capacity(n);
+
+        for (i, cur) in requests.iter().enumerate() {
+            let mut best_idx = i;
+            let mut best = cur;
+
+            for (j, cand) in requests.iter().enumerate() {
+                if cand.pjoin(&cur).as_ref() == Some(cand) {
+                    if cand < best || (cand == best && j < best_idx) {
+                        best_idx = j;
+                        best = cand;
+                    }
+                }
+            }
+            
+            out.push(best_idx);
+        }
+
+        out
+    }
 
     #[cfg(feature="specialize_io")]
     pub fn transform_multi_multi_(&mut self, pat_expr: Expr, tpl_expr: Expr, add: Expr) -> (usize, bool) {
@@ -1233,7 +1234,7 @@ impl Space {
         let mut tpl_args = Vec::with_capacity(64);
         ExprEnv::new(0, tpl_expr).args(&mut tpl_args);
         let mut templates: Vec<_> = tpl_args[1..].iter().map(|ee| ee.subsexpr()).collect();
-        let mut template_prefixes: Vec<_> = templates.iter().map(|e| unsafe { e.prefix().unwrap_or_else(|x| e.span()).as_ref().unwrap() }).collect();
+        let mut template_prefixes: Vec<_> = templates.iter().map(|e| unsafe { e.prefix().unwrap_or_else(|x| x).as_ref().unwrap() }).collect();
         let mut subsumption = Self::prefix_subsumption(&template_prefixes[..]);
         let mut placements = subsumption.clone();
         let mut read_copy = self.btm.clone();
@@ -1314,7 +1315,7 @@ impl Space {
         let mut tpl_args = Vec::with_capacity(64);
         ExprEnv::new(0, tpl_expr).args(&mut tpl_args);
         let mut templates: Vec<_> = tpl_args[1..].iter().map(|ee| ee.subsexpr()).collect();
-        let mut template_prefixes: Vec<_> = templates.iter().map(|e| unsafe { e.prefix().unwrap_or_else(|x| e.span()).as_ref().unwrap() }).collect();
+        let mut template_prefixes: Vec<_> = templates.iter().map(|e| unsafe { e.prefix().unwrap_or_else(|x| x).as_ref().unwrap() }).collect();
         let mut subsumption = Self::prefix_subsumption(&template_prefixes[..]);
         let mut placements = subsumption.clone();
         let mut read_copy = self.btm.clone();
@@ -1398,22 +1399,31 @@ impl Space {
         let mut templates: Vec<_> = tpl_args[1..].iter().map(|ee| ee.subsexpr()).collect();
         let mut sinks: Vec<_> = templates.iter().map(|e| ASink::new(*e)).collect();
         let mut template_prefixes: Vec<_> = sinks.iter().map(|sink|
-            match sink.request().next().unwrap() {
-                WriteResourceRequest::BTM(p) => p,
-                WriteResourceRequest::ACT(_) => unreachable!(),
-                WriteResourceRequest::Z3(_) => unreachable!()
-            }
+            sink.request().next().unwrap()
         ).collect();
-        let mut subsumption = Self::prefix_subsumption(&template_prefixes[..]);
+        let mut subsumption = Self::prefix_subsumption_resources(&template_prefixes[..]);
         let mut placements = subsumption.clone();
         let mut read_copy = self.btm.clone();
         let mut zh = self.btm.zipper_head();
         read_copy.insert(unsafe { add.span().as_ref().unwrap() }, ());
-        let mut template_wzs: Vec<_> = Vec::with_capacity(64);
+        let mut template_resources: Vec<_> = Vec::with_capacity(64);
+        let mut outstanding_wzs = Vec::with_capacity(64);
+        let mut outstanding_wzs_ptr = ((&outstanding_wzs) as *const Vec<WriteZipperTracked<()>>).cast_mut();
         template_prefixes.iter().enumerate().for_each(|(i, x)| {
             if subsumption[i] == i {
-                placements[i] = template_wzs.len();
-                template_wzs.push(unsafe { zh.write_zipper_at_exclusive_path_unchecked(x) });
+                placements[i] = template_resources.len();
+                match *x {
+                    WriteResourceRequest::BTM(p) => {
+                        unsafe { outstanding_wzs_ptr.as_mut().unwrap().push(zh.write_zipper_at_exclusive_path_unchecked(p)) };
+                        template_resources.push(
+                            WriteResource::BTM(unsafe { outstanding_wzs_ptr.as_mut().unwrap().last_mut().unwrap() })
+                        )
+                    }
+                    WriteResourceRequest::ACT(f) => {
+                        template_resources.push(WriteResource::ACT(()))
+                    }
+                    WriteResourceRequest::Z3(_) => {}
+                }
             }
         });
         for i in 0..subsumption.len() {
@@ -1451,7 +1461,7 @@ impl Space {
                     };
                 
                     for (i, template) in templates.iter().enumerate() {
-                        let wz = &mut template_wzs[subsumption[i]];
+                        let wz = unsafe { std::ptr::read(&template_resources[subsumption[i]]) };
 
                         trace!(target: "transform", "{i} template {} @ ({oi} {ni})", serialize(unsafe { template.span().as_ref().unwrap()}));
 
@@ -1463,7 +1473,7 @@ impl Space {
                         astack.clear();
 
                         trace!(target: "transform", "U {i} out {:?}", Expr{ ptr: buffer.as_mut_ptr() });
-                        sinks[i].sink(std::iter::once(WriteResource::BTM(wz)), &buffer[..]);
+                        sinks[i].sink(std::iter::once(wz), &buffer[..]);
                     }
                     true
                 }
@@ -1471,10 +1481,10 @@ impl Space {
         });
 
         for (i, s) in sinks.iter_mut().enumerate() {
-            let wz = &mut template_wzs[subsumption[i]];
-            any_new |= s.finalize(std::iter::once(WriteResource::BTM(wz)));
+            let wz = unsafe { std::ptr::read(&template_resources[subsumption[i]]) };
+            any_new |= s.finalize(std::iter::once(wz));
         }
-        for wz in template_wzs {
+        for wz in outstanding_wzs.iter_mut() {
             zh.cleanup_write_zipper(wz);
         }
 
@@ -1490,22 +1500,31 @@ impl Space {
         let mut templates: Vec<_> = tpl_args[1..].iter().map(|ee| ee.subsexpr()).collect();
         let mut sinks: Vec<_> = templates.iter().map(|e| { if no_sink { ASink::compat(*e) } else { ASink::new(*e) } }).collect();
         let mut template_prefixes: Vec<_> = sinks.iter().map(|sink|
-            match sink.request().next().unwrap() {
-                WriteResourceRequest::BTM(p) => p,
-                WriteResourceRequest::ACT(_) => unreachable!(),
-                WriteResourceRequest::Z3(_) => unreachable!(),
-            }
+            sink.request().next().unwrap()
         ).collect();
-        let mut subsumption = Self::prefix_subsumption(&template_prefixes[..]);
+        let mut subsumption = Self::prefix_subsumption_resources(&template_prefixes[..]);
         let mut placements = subsumption.clone();
         let mut read_copy = self.btm.clone();
         let mut zh = self.btm.zipper_head();
         read_copy.insert(unsafe { add.span().as_ref().unwrap() }, ());
-        let mut template_wzs: Vec<_> = Vec::with_capacity(64);
+        let mut template_resources: Vec<_> = Vec::with_capacity(64);
+        let mut outstanding_wzs = Vec::with_capacity(64);
+        let mut outstanding_wzs_ptr = ((&outstanding_wzs) as *const Vec<WriteZipperTracked<()>>).cast_mut();
         template_prefixes.iter().enumerate().for_each(|(i, x)| {
             if subsumption[i] == i {
-                placements[i] = template_wzs.len();
-                template_wzs.push(unsafe { zh.write_zipper_at_exclusive_path_unchecked(x) });
+                placements[i] = template_resources.len();
+                match *x {
+                    WriteResourceRequest::BTM(p) => {
+                        unsafe { outstanding_wzs_ptr.as_mut().unwrap().push(zh.write_zipper_at_exclusive_path_unchecked(p)) };
+                        template_resources.push(
+                            WriteResource::BTM(unsafe { outstanding_wzs_ptr.as_mut().unwrap().last_mut().unwrap() })
+                        )
+                    }
+                    WriteResourceRequest::ACT(f) => {
+                        template_resources.push(WriteResource::ACT(()))
+                    }
+                    WriteResourceRequest::Z3(_) => {}
+                }
             }
         });
         for i in 0..subsumption.len() {
@@ -1544,7 +1563,7 @@ impl Space {
                     };
 
                     for (i, template) in templates.iter().enumerate() {
-                        let wz = &mut template_wzs[subsumption[i]];
+                        let wz = unsafe { std::ptr::read(&template_resources[subsumption[i]]) };
 
                         trace!(target: "transform", "{i} template {} @ ({oi} {ni})", serialize(unsafe { template.span().as_ref().unwrap()}));
 
@@ -1556,7 +1575,7 @@ impl Space {
                         astack.clear();
 
                         trace!(target: "transform", "U {i} out {:?}", Expr{ ptr: buffer.as_mut_ptr() });
-                        sinks[i].sink(std::iter::once(WriteResource::BTM(wz)), &buffer[..]);
+                        sinks[i].sink(std::iter::once(wz), &buffer[..]);
                     }
                     true
                 }
@@ -1564,10 +1583,10 @@ impl Space {
         });
 
         for (i, s) in sinks.iter_mut().enumerate() {
-            let wz = &mut template_wzs[subsumption[i]];
-            any_new |= s.finalize(std::iter::once(WriteResource::BTM(wz)));
+            let wz = unsafe { std::ptr::read(&template_resources[subsumption[i]]) };
+            any_new |= s.finalize(std::iter::once(wz));
         }
-        for wz in template_wzs {
+        for wz in outstanding_wzs.iter_mut() {
             zh.cleanup_write_zipper(wz);
         }
 
