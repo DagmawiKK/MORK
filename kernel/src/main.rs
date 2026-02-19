@@ -1,4 +1,5 @@
 #![feature(string_from_utf8_lossy_owned)]
+mod weightedsweep;
 
 use mork::space::{transitions, unifications, writes, Space, ACT_PATH};
 use mork::{expr, prefix, sexpr};
@@ -20,6 +21,7 @@ use clap::builder::TypedValueParser;
 use clap::{Args, Parser as CLAParser, Subcommand, ValueEnum};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use weighted_atom_sweep::*;
 
 /*fn main() {
     let mut s = Space::new();
@@ -4241,6 +4243,71 @@ fn bench_was() {
     let controller = sweep.spawn();
 
     // Let it run for 5 seconds
+    std::thread::sleep(std::time::Duration::from_secs(5));
+
+    let result = controller.shutdown();
+    assert!(result.is_ok(), "sweep shutdown should succeed");
+
+    println!("bench_was completed successfully");
+}
+
+fn becnh_random() {
+    use pathmap::zipper::{ReadZipperTracked, ZipperIteration, ZipperValues};
+    use rand::seq::IndexedRandom;
+    use std::sync::Arc;
+    use weighted_atom_sweep::{
+        AtomHeader, AtomPosition, Operation, OperationObserver, TraversalEngine, TraversalError,
+        WeightedAtomSweep, WeightedAtomSweepSettings,
+    };
+    use weightedsweep::*;
+
+    #[derive(Debug, Clone, Default)]
+    pub struct SpaceRef {
+        pub atom_id: u64,
+        pub weight: i32,
+        pub visited_count: u64,
+    }
+    
+
+    impl AtomHeader for SpaceRef {}
+
+    let mut s = Space::new();
+
+    let space_url = "https://raw.githubusercontent.com/Adam-Vandervorst/metta-examples/refs/heads/main/aunt-kg/simpsons.metta";
+
+    let output = std::process::Command::new("curl")
+        .args(&["-s", "-L", space_url])
+        .output()
+        .expect("Failed to execute curl command");
+
+    if !output.status.success() {
+        panic!(
+            "Failed to fetch space URL: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    s.add_all_sexpr(&output.stdout).unwrap();
+    println!("Space loaded with {} atoms", s.btm.val_count());
+
+    fn analyze_atom(atom: Arc<AtomPosition>) {
+        // Simulate analysis work on the atom
+        let path_len = atom.len();
+        std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
+    }
+
+    // Create the sweep
+    let mut sweep = WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
+
+    let engine1 = TraversalEngine::<U64AtomHeader>::new("random_sampler", next_atom);
+    let process1 = sweep.add_engine(engine1);
+
+    let analyze_op = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
+
+    process1.subscribe(analyze_op);
+
+    let controller = sweep.spawn();
+
     std::thread::sleep(std::time::Duration::from_secs(5));
 
     let result = controller.shutdown();
