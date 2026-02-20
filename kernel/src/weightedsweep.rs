@@ -55,9 +55,9 @@ where
     H: AtomHeader + From<i32> + Into<i32> + Copy + PartialOrd + Default
 {
     let binding  = H::default();
-    let root_agg_w = z.val().unwrap_or(&binding);
-    let child_agg_w:i32 = root_agg_w.clone().into();
-    // println!("in next atom {child_agg_w}");
+    let child_agg_w = node_agg_w(z.fork_read_zipper()).unwrap();
+    // let child_agg_w:i32 = root_agg_w.clone().into();
+    println!("in next atom {child_agg_w} {:?}", z.val() );
 
     // Handle case where there are no children weights
     if child_agg_w == 0 {
@@ -65,7 +65,7 @@ where
     }
 
     let mut random_num = rand::random_range(0..child_agg_w);
-    // println!("in next atom after checking child_agg_w with rand {random_num}");
+    println!("in next atom after checking child_agg_w with rand {random_num}");
 
     while z.child_count() >= 1 {
         if z.val().is_none() {
@@ -74,7 +74,7 @@ where
 
         // 5) returns a vec of tuple for agg of each child
         let choice_param = children_agg_w(z.fork_read_zipper()).unwrap();
-        // println!("choice param {:?} on path {:?}", choice_param, String::from_utf8(z.origin_path().to_vec()).unwrap());
+        println!("choice param {:?} on path {:?}", choice_param, String::from_utf8(z.origin_path().to_vec()).unwrap());
 
         // 6) choose based on the path and rand value
         let choice = choice(choice_param.to_vec(), &z.fork_read_zipper(), &mut random_num);
@@ -82,7 +82,7 @@ where
         // 7) return if value is selected else conitnue to selected path
         let byte = match choice {
             PathChoice::Value(_) => {
-                // println!("chosen in next_atom {:?}", String::from_utf8(z.origin_path().to_vec()).unwrap());
+                println!("chosen in next_atom {:?}", String::from_utf8(z.origin_path().to_vec()).unwrap());
                 return Ok(z.origin_path().to_vec())
             },
             PathChoice::Path(b) => b
@@ -93,7 +93,7 @@ where
     }
 
     let path = z.origin_path();
-    // println!("chosen in next_atom {:?}", String::from_utf8(path.to_vec()).unwrap());
+    println!("chosen in next_atom {:?}", String::from_utf8(path.to_vec()).unwrap());
     Ok(path.to_vec())
 }
 
@@ -128,6 +128,7 @@ where
          maybe_v: Option<&H>,
          _path| {
             let from_children = children.iter().copied().sum::<i32>();
+            println!("nodeagw {from_children}");
             let here: i32 = match maybe_v {
                 Some(h) => (*h).into(),
                 None => H::default().into(),

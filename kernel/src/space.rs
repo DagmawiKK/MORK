@@ -1,4 +1,5 @@
 use std::io::{BufRead, Read, Write};
+use std::sync::Arc;
 use std::{mem, process, ptr};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
@@ -13,6 +14,7 @@ use std::str::Utf8Error;
 use std::task::Poll;
 use std::time::Instant;
 use futures::StreamExt;
+use std::sync::Mutex;
 use pathmap::ring::{AlgebraicStatus, Lattice};
 use mork_expr::{byte_item, Expr, ExprZipper, ExtractFailure, item_byte, parse, serialize, Tag, traverseh, ExprEnv, unify, UnificationFailure, apply, destruct};
 use mork_frontend::bytestring_parser::{Parser, ParserError, Context};
@@ -34,7 +36,7 @@ pub static ACT_PATH: &'static str = "/dev/shm/";
 // pub static ACT_PATH: &'static str = "/mnt/data/";
 
 pub struct Space {
-    pub btm: PathMap<()>,
+    pub btm: Arc<Mutex<PathMap<()>>>,
     pub sm: SharedMappingHandle,
     pub mmaps: HashMap<&'static str, ArenaCompactTree<memmap2::Mmap>>,
     pub z3s: HashMap<&'static str, subprocess::Popen>,
@@ -441,7 +443,7 @@ macro_rules! sexpr {
 
 impl Space {
     pub fn new() -> Self {
-        Self { btm: PathMap::new(), sm: SharedMapping::new(), mmaps: HashMap::new(), z3s: HashMap::new(), last_merkleize: Instant::now() }
+        Self { btm: Arc::new(Mutex::new(PathMap::new())), sm: SharedMapping::new(), mmaps: HashMap::new(), z3s: HashMap::new(), last_merkleize: Instant::now() }
     }
 
     pub fn parse_sexpr(&mut self, r: &[u8], buf: *mut u8) -> Result<(Expr, usize), ParserError> {
@@ -458,7 +460,7 @@ impl Space {
     }
 
     pub fn statistics(&self) {
-        println!("val count {}", self.btm.val_count());
+        println!("val count {}", self.btm.lock().unwrap().val_count());
     }
 
     /*
@@ -505,7 +507,8 @@ impl Space {
 
     pub fn load_csv(&mut self, r: &[u8], pattern: Expr, template: Expr, seperator: u8) -> Result<usize, String> {
         let constant_template_prefix = unsafe { template.prefix().unwrap_or_else(|_| template.span()).as_ref().unwrap() };
-        let mut wz = self.btm.write_zipper_at_path(constant_template_prefix);
+        let mut locked = self.btm.lock().unwrap();
+        let mut wz = locked.write_zipper_at_path(constant_template_prefix);
         let mut buf = [0u8; 2048];
 
         let mut i = 0usize;
@@ -550,7 +553,8 @@ impl Space {
     }
 
     pub fn load_json(&mut self, r: &[u8]) -> Result<usize, String> {
-        let mut wz = self.btm.write_zipper();
+        let mut locked = self.btm.lock().unwrap();
+        let mut wz = locked.write_zipper();
         let mut st = SpaceTranscriber{ count: 0, wz: &mut wz, pdp: ParDataParser::new(&self.sm) };
         let mut p = mork_frontend::json_parser::Parser::new(unsafe { std::str::from_utf8_unchecked(r) });
         p.parse(&mut st).unwrap();
@@ -613,7 +617,8 @@ impl Space {
     }
 
     pub fn load_jsonl(&mut self, r: &[u8]) -> Result<(usize, usize), String> {
-        let mut wz = self.btm.write_zipper();
+        let mut locked = self.btm.lock().unwrap();
+        let mut wz = locked.write_zipper();
         let mut lines = 0usize;
         let mut count = 0usize;
         let mut pdp = ParDataParser::new(&self.sm);
@@ -638,7 +643,8 @@ impl Space {
 
     pub fn load_json_(&mut self, r: &[u8], pattern: Expr, template: Expr) -> Result<usize, String> {
         let constant_template_prefix = unsafe { template.prefix().unwrap_or_else(|_| template.span()).as_ref().unwrap() };
-        let mut wz = self.btm.write_zipper_at_path(constant_template_prefix);
+        let mut locked = self.btm.lock().unwrap();
+        let mut wz = locked.write_zipper_at_path(constant_template_prefix);
 
         let mut st = SpaceTranscriber{ count: 0, wz: &mut wz, pdp: ParDataParser::new(&self.sm) };
         let mut p = mork_frontend::json_parser::Parser::new(unsafe { std::str::from_utf8_unchecked(r) });
@@ -842,8 +848,8 @@ impl Space {
             match parser.sexpr(&mut it, &mut ez) {
                 Ok(()) => {
                     let data = &stack[..ez.loc];
-                    if add { self.btm.insert(data, ()); }
-                    else { self.btm.remove(data); }
+                    if add { self.btm.lock().unwrap().insert(data, ()); }
+                    else { self.btm.lock().unwrap().remove(data); }
                 }
                 Err(ParserError::InputFinished) => { break }
                 Err(other) => { panic!("{:?}", other) }
@@ -858,7 +864,8 @@ impl Space {
     pub fn remove_sexpr(&mut self, r: &[u8], pattern: Expr, template: Expr) -> Result<usize, String> { self.load_sexpr_impl(r, pattern, template, false) }
     pub fn load_sexpr_impl(&mut self, r: &[u8], pattern: Expr, template: Expr, add: bool) -> Result<usize, String> {
         let constant_template_prefix = unsafe { template.prefix().unwrap_or_else(|_| template.span()).as_ref().unwrap() };
-        let mut wz = self.btm.write_zipper_at_path(constant_template_prefix);
+        let mut locked = self.btm.lock().unwrap();
+        let mut wz = locked.write_zipper_at_path(constant_template_prefix);
         let mut buffer: Vec<u8> = Vec::with_capacity(1 << 32);
         unsafe { buffer.set_len(1 << 32); }
         let mut stack = Vec::with_capacity(1 << 32);
@@ -892,7 +899,8 @@ impl Space {
     }
 
     pub fn dump_all_sexpr<W : Write>(&self, w: &mut W) -> Result<usize, String> {
-        let mut rz = self.btm.read_zipper();
+        let mut locked = self.btm.lock().unwrap();
+        let mut rz = locked.read_zipper();
         let mut i = 0usize;
         while rz.to_next_val() {
             // println!("{}", serialize(rz.path()));
@@ -922,7 +930,7 @@ impl Space {
         let mut pat = vec![item_byte(Tag::Arity(2)), item_byte(Tag::SymbolSize(1)), b','];
         pat.extend_from_slice(unsafe { pattern.span().as_ref().unwrap() });
 
-        Self::query_multi(&self.btm, Expr{ ptr: pat.leak().as_mut_ptr() }, |refs_bindings, loc| {
+        Self::query_multi(&self.btm.lock().unwrap(), Expr{ ptr: pat.leak().as_mut_ptr() }, |refs_bindings, loc| {
             let mut oz = ExprZipper::new(Expr { ptr: buffer.as_mut_ptr() });
 
             match refs_bindings {
@@ -978,26 +986,26 @@ impl Space {
 
     pub fn backup_tree<OutDirPath : AsRef<std::path::Path>>(&self, path: OutDirPath) -> Result<(), std::io::Error> {
         pathmap::arena_compact::ArenaCompactTree::dump_from_zipper(
-            self.btm.read_zipper(), |_v| 0, path).map(|_tree| ())
+            self.btm.lock().unwrap().read_zipper(), |_v| 0, path).map(|_tree| ())
     }
 
     pub fn restore_tree(&mut self, path: impl AsRef<std::path::Path>) -> Result<(), std::io::Error> {
         let tree = pathmap::arena_compact::ArenaCompactTree::open_mmap(path)?;
         let mut rz = tree.read_zipper();
         while rz.to_next_val() {
-            self.btm.insert(rz.path(), ());
+            self.btm.lock().unwrap().insert(rz.path(), ());
         }
         Ok(())
     }
 
     pub fn backup_paths<OutDirPath: AsRef<std::path::Path>>(&self, path: OutDirPath) -> Result<pathmap::paths_serialization::SerializationStats, std::io::Error> {
         let mut file = File::create(path).unwrap();
-        pathmap::paths_serialization::serialize_paths(self.btm.read_zipper(), &mut file)
+        pathmap::paths_serialization::serialize_paths(self.btm.lock().unwrap().read_zipper(), &mut file)
     }
 
     pub fn restore_paths<OutDirPath : AsRef<std::path::Path>>(&mut self, path: OutDirPath) -> Result<pathmap::paths_serialization::DeserializationStats, std::io::Error> {
         let mut file = File::open(path).unwrap();
-        pathmap::paths_serialization::deserialize_paths(self.btm.write_zipper(), &mut file, ())
+        pathmap::paths_serialization::deserialize_paths(self.btm.lock().unwrap().write_zipper(), &mut file, ())
     }
 
     pub fn query_multi<F : FnMut(Result<&[u32], BTreeMap<(u8, u8), ExprEnv>>, Expr) -> bool>(btm: &PathMap<()>, pat_expr: Expr, mut effect: F) -> usize {
@@ -1238,8 +1246,9 @@ impl Space {
         let mut subsumption = Self::prefix_subsumption(&template_prefixes[..]);
         let mut placements = subsumption.clone();
         let mut read_copy = self.btm.clone();
-        let mut zh = self.btm.zipper_head();
-        read_copy.insert(unsafe { add.span().as_ref().unwrap() }, ());
+        let mut locked = self.btm.lock().unwrap();
+        let mut zh = locked.zipper_head();
+        read_copy.lock().unwrap().insert(unsafe { add.span().as_ref().unwrap() }, ());
         let mut template_wzs: Vec<_> = Vec::with_capacity(64);
         template_prefixes.iter().enumerate().for_each(|(i, x)| {
             if subsumption[i] == i {
@@ -1261,7 +1270,7 @@ impl Space {
         let mut astack = Vec::with_capacity(64);
 
         let mut any_new = false;
-        let touched = Self::query_multi(&read_copy, pat_expr, |refs_bindings, loc| {
+        let touched = Self::query_multi(&read_copy.lock().unwrap(), pat_expr, |refs_bindings, loc| {
             trace!(target: "transform", "data {}", serialize(unsafe { loc.span().as_ref().unwrap()}));
             unsafe { writes += template_prefixes.len(); }
             match refs_bindings {
@@ -1318,8 +1327,9 @@ impl Space {
         let mut template_prefixes: Vec<_> = templates.iter().map(|e| unsafe { e.prefix().unwrap_or_else(|x| x).as_ref().unwrap() }).collect();
         let mut subsumption = Self::prefix_subsumption(&template_prefixes[..]);
         let mut placements = subsumption.clone();
-        let mut read_copy = self.btm.clone();
-        let mut zh = self.btm.zipper_head();
+        let mut read_copy = self.btm.lock().unwrap().clone();
+        let mut locked = self.btm.lock().unwrap();
+        let mut zh = locked.zipper_head();
         read_copy.insert(unsafe { add.span().as_ref().unwrap() }, ());
         let mut template_wzs: Vec<_> = Vec::with_capacity(64);
         template_prefixes.iter().enumerate().for_each(|(i, x)| {
@@ -1403,8 +1413,9 @@ impl Space {
         ).collect();
         let mut subsumption = Self::prefix_subsumption_resources(&template_prefixes[..]);
         let mut placements = subsumption.clone();
-        let mut read_copy = self.btm.clone();
-        let mut zh = self.btm.zipper_head();
+        let mut read_copy = self.btm.lock().unwrap().clone();
+        let mut locked = self.btm.lock().unwrap();
+        let mut zh = locked.zipper_head();
         read_copy.insert(unsafe { add.span().as_ref().unwrap() }, ());
         let mut template_resources: Vec<_> = Vec::with_capacity(64);
         let mut outstanding_wzs = Vec::with_capacity(64);
@@ -1504,8 +1515,9 @@ impl Space {
         ).collect();
         let mut subsumption = Self::prefix_subsumption_resources(&template_prefixes[..]);
         let mut placements = subsumption.clone();
-        let mut read_copy = self.btm.clone();
-        let mut zh = self.btm.zipper_head();
+        let mut read_copy = self.btm.lock().unwrap().clone();
+        let mut locked = self.btm.lock().unwrap();
+        let mut zh = locked.zipper_head();
         read_copy.insert(unsafe { add.span().as_ref().unwrap() }, ());
         let mut template_resources: Vec<_> = Vec::with_capacity(64);
         let mut outstanding_wzs = Vec::with_capacity(64);
@@ -1603,7 +1615,7 @@ impl Space {
         }
         debug!(target: "interpret", "interpreting {:?}", serialize(unsafe { rt.span().as_ref().unwrap() }));
         #[cfg(debug_assertions)]
-        { let mut rz = self.btm.read_zipper(); while rz.to_next_val() { trace!(target: "interpret", "on space {:?}", serialize(unsafe { rz.path() })); }; drop(rz); }
+        { let mut locked = self.btm.lock().unwrap(); let mut rz = locked.read_zipper(); while rz.to_next_val() { trace!(target: "interpret", "on space {:?}", serialize(unsafe { rz.path() })); }; drop(rz); }
         destruct!(rt, ("exec" loc pat_expr tpl_expr), unsafe {
             if let Tag::Arity(i) = byte_item(*pat_expr.ptr) { if i == 0 { return Err("pattern expression can not be empty"); } } else { return Err("pattern must be an expression, not a symbol or variables") }
             if *pat_expr.ptr.add(1) != item_byte(Tag::SymbolSize(1)) { return Err("pattern functor can only be , or I") }
@@ -1638,20 +1650,28 @@ impl Space {
         const PREFIX: [u8; 6] = const { [item_byte(Tag::Arity(4)), item_byte(Tag::SymbolSize(4)), b'e', b'x', b'e', b'c' ] };
 
         while {
-            let mut rz = self.btm.read_zipper_at_borrowed_path(&PREFIX[..]);
-            if rz.to_next_val() {
-                // cannot be here `rz` conflicts potentially with zippers(rz.path())
-                let mut x: Vec<u8> = rz.into_path(); // should use local buffer
-                self.btm.remove(&x[..]);
-                // println!("expr {:?}", Expr{ ptr: x.as_mut_ptr() });
+            let path_data = {
+                let mut locked = self.btm.lock().unwrap();  // ← Borrow STARTS
+                let mut rz = locked.read_zipper_at_borrowed_path(&PREFIX[..]);
+        
+                if rz.to_next_val() {
+                    let x = rz.into_path();  // Get the data we need
+                    locked.remove(&x[..]);    // Remove from tree
+                    Some(x)                   // Return data from scope
+                } else {
+                    None
+                }
+            };
+
+            if let Some(mut x) = path_data {
                 if let Err(e) = self.interpret(Expr{ ptr: x.as_mut_ptr() }) {
                     debug!(target: "interpret", "not interpreting: {}", e);
                 }
-                done < steps
-            } else {
-                false
-            }
-        } { done += 1 }
+                    done < steps
+                } else {
+                    false
+                }
+            } { done += 1 }
 
         done
     }
@@ -1668,7 +1688,8 @@ impl Space {
         // stack.reserve(4096);
         
 
-        let mut rz = self.btm.read_zipper_at_path(&token[..]);
+        let mut locked = self.btm.lock().unwrap();
+        let mut rz = locked.read_zipper_at_path(&token[..]);
         rz.reserve_buffers(4096, 64);
 
         rz.descend_until();

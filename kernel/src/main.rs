@@ -5,7 +5,7 @@ use mork::space::{transitions, unifications, writes, Space, ACT_PATH};
 use mork::{expr, prefix, sexpr};
 use mork_expr::{item_byte, serialize, SourceItem, Tag};
 use mork_frontend::bytestring_parser::Parser;
-use pathmap::zipper::{Zipper, ZipperAbsolutePath, ZipperIteration, ZipperMoving};
+use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, Zipper, ZipperAbsolutePath, ZipperCreation, ZipperIteration, ZipperMoving, ZipperWriting};
 use pathmap::PathMap;
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
@@ -13,6 +13,7 @@ use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::ops::Add;
+use std::sync::Arc;
 use std::time::Instant;
 // use std::future::Future;
 // use std::task::Poll;
@@ -22,6 +23,8 @@ use clap::{Args, Parser as CLAParser, Subcommand, ValueEnum};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use weighted_atom_sweep::*;
+
+use crate::weightedsweep::{GLOBAL_WS_SWEEP, init_weight, next_atom, U64AtomHeader };
 
 /*fn main() {
     let mut s = Space::new();
@@ -65,7 +68,7 @@ fn bench_flybase() {
     println!(
         "add gene name index took {} ms added {}",
         add_gene_name_index_start.elapsed().as_millis(),
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     // let all_related_to_gene_start = Instant::now();
@@ -423,7 +426,7 @@ fn lookup() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -451,7 +454,7 @@ fn positive() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -479,7 +482,7 @@ fn positive_equal() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -510,7 +513,7 @@ fn negative() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -541,7 +544,7 @@ fn negative_equal() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -572,7 +575,7 @@ fn bipolar() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -603,7 +606,7 @@ fn bipolar_equal() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -632,7 +635,7 @@ fn two_positive_equal() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -661,7 +664,7 @@ fn two_positive_equal_crossed() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -690,7 +693,7 @@ fn two_bipolar_equal_crossed() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -738,7 +741,7 @@ fn roman_disjoin_initial() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -791,7 +794,7 @@ fn roman_disjoin_final() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -830,7 +833,7 @@ fn func_type_unification() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -855,7 +858,7 @@ fn issue_43() {
 
     let mut t0 = Instant::now();
     let steps = s.metta_calculus(1000000000000000);
-    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.val_count());
+    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.lock().unwrap().val_count());
 
     let mut v = vec![];
     s.dump_all_sexpr(&mut v).unwrap();
@@ -876,7 +879,7 @@ f
 
     s.add_all_sexpr(SPACE_EXPRS.as_bytes()).unwrap();
 
-    s.btm.iter().for_each(|(p, k)| println!("{p:?}"));
+    s.btm.lock().unwrap().iter().for_each(|(p, k)| println!("{p:?}"));
 
     let mut t0 = Instant::now();
     let steps = s.metta_calculus(1000000000000000);
@@ -884,7 +887,7 @@ f
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -958,7 +961,7 @@ fn bench_lr() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1003,7 +1006,7 @@ fn pattern_mining() {
 
     s.add_all_sexpr(SPACE_EXPRS.as_bytes()).unwrap();
 
-    s.btm
+    s.btm.lock().unwrap() 
         .iter()
         .for_each(|(p, k)| println!("{}", serialize(&p[..])));
 
@@ -1013,9 +1016,9 @@ fn pattern_mining() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
-    s.btm
+    s.btm.lock().unwrap()
         .iter()
         .for_each(|(p, k)| println!("{}", serialize(&p[..])));
 
@@ -1048,7 +1051,7 @@ fn sink_pure_basic() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1083,7 +1086,7 @@ fn sink_pure_basic_nested() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1122,7 +1125,7 @@ fn sink_pure_roman_validation() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1176,7 +1179,7 @@ fn sink_pure_dynamic_subformula() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1211,7 +1214,7 @@ fn sink_pure_quote_collapse_symbol() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1246,7 +1249,7 @@ fn sink_pure_explode_collapse_ident() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1277,7 +1280,7 @@ fn sink_bass64url_ident() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1308,7 +1311,7 @@ fn sink_hex_ident() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1340,7 +1343,7 @@ fn sink_hash_expr() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1378,7 +1381,7 @@ fn sink_even_half() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1470,7 +1473,7 @@ fn ip_sudoku() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1562,9 +1565,10 @@ fn formula_execution() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
     s.btm
+        .lock().unwrap()
         .iter()
         .for_each(|(p, k)| println!("{}", serialize(&p[..])));
 
@@ -1607,7 +1611,7 @@ fn pattern_mining_lensy() {
 
     s.add_all_sexpr(SPACE_EXPRS.as_bytes()).unwrap();
 
-    s.btm
+    s.btm.lock().unwrap() 
         .iter()
         .for_each(|(p, k)| println!("{}", serialize(&p[..])));
 
@@ -1617,9 +1621,9 @@ fn pattern_mining_lensy() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
-    s.btm
+    s.btm.lock().unwrap()
         .iter()
         .for_each(|(p, k)| println!("{}", serialize(&p[..])));
 
@@ -1704,7 +1708,7 @@ fn bench_pattern_mining_lensy() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1765,7 +1769,7 @@ fn meta_ana() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -1835,7 +1839,7 @@ fn meta_ana_exec() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2011,7 +2015,7 @@ fn bench_tile_puzzle_states() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     s.add_all_sexpr(
@@ -2044,7 +2048,7 @@ fn bench_tile_puzzle_states() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v1 = vec![];
@@ -2087,7 +2091,7 @@ fn source_space_two_bipolar_equal_crossed() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2127,7 +2131,7 @@ fn source_act_two_bipolar_equal_crossed() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2167,7 +2171,7 @@ fn source_space_act_two_bipolar_equal_crossed() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2196,7 +2200,7 @@ fn source_cmp_eq() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2224,7 +2228,7 @@ fn source_sink_cmp_eq_remove() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2253,7 +2257,7 @@ fn source_sink_cmp_eq_remove_both() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2291,7 +2295,7 @@ fn source_sink_annihilate() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2321,7 +2325,7 @@ fn source_cmp_eq_var_constraint() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2348,7 +2352,7 @@ fn source_cmp_ne() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2385,7 +2389,7 @@ fn source_cmp_rel() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2425,7 +2429,7 @@ fn source_map_reverse() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2458,7 +2462,7 @@ fn source_map_oom() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2490,7 +2494,7 @@ fn sink_two_bipolar_equal_crossed() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2519,7 +2523,7 @@ fn sink_two_positive_equal_crossed() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2547,7 +2551,7 @@ A
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2581,7 +2585,7 @@ fn sink_remove_many() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2618,7 +2622,7 @@ fn cross_join_tuple() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2671,7 +2675,7 @@ fn cross_join_dict() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2706,7 +2710,7 @@ fn sink_add_remove_var() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2753,7 +2757,7 @@ fn sink_odd_even_sort() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2790,7 +2794,7 @@ fn sink_unify() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2830,7 +2834,7 @@ fn sink_anti_unify() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2863,7 +2867,7 @@ fn sink_head() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2897,7 +2901,7 @@ fn sink_count_literal() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2926,7 +2930,7 @@ fn sink_sum_literal() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2958,7 +2962,7 @@ fn sink_sum_sets() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -2992,7 +2996,7 @@ fn sink_count_constant() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3022,7 +3026,7 @@ fn sink_count() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3063,7 +3067,7 @@ fn sink_exec_remove_trigger() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3093,7 +3097,7 @@ fn sink_act_readback() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     {
@@ -3122,7 +3126,7 @@ fn sink_act_mixed_readback() {
 
     let mut t0 = Instant::now();
     let steps = s.metta_calculus(1000000000000000);
-    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.val_count());
+    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.lock().unwrap().val_count());
 
     {
         let mut s = Space::new();
@@ -3151,7 +3155,7 @@ fn source_sink_act_readback() {
 
     let mut t0 = Instant::now();
     let steps = s.metta_calculus(1000000000000000);
-    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.val_count());
+    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.lock().unwrap().val_count());
 
     let mut v = vec![];
     s.dump_sexpr(expr!(s, "[4] cuux $ $ $"), expr!(s, "[4] cuux _1 _2 _3"), &mut v);
@@ -3189,7 +3193,7 @@ fn sink_count_double() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3229,7 +3233,7 @@ fn sink_count_double_repeated() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3266,7 +3270,7 @@ fn sink_hash_spaces() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3303,7 +3307,7 @@ fn sink_hash_properties() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3370,7 +3374,7 @@ fn sink_hexlife_symbolic() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3442,7 +3446,7 @@ fn bench_sink_hexlife_axial() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3484,7 +3488,7 @@ fn sink_z3_basic() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3540,7 +3544,7 @@ fn sink_wasm_add() {
                     .to_be_bytes()
                     .as_slice(),
             );
-            s.btm.insert(&e[..], ());
+            s.btm.lock().unwrap().insert(&e[..], ());
         }
     }
     s.add_all_sexpr(&args[..]).unwrap();
@@ -3551,7 +3555,7 @@ fn sink_wasm_add() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     // let mut v = vec![];
@@ -3607,7 +3611,7 @@ fn bench_sink_odd_even_sort(elements: usize) {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3665,7 +3669,7 @@ fn logic_query() {
 
     let steps = s.metta_calculus(1000000000000000);
 
-    assert_eq!(s.btm.val_count(), 79);
+    assert_eq!(s.btm.lock().unwrap().val_count(), 79);
 }
 const PROJECT_PATH: &str = env!("CARGO_MANIFEST_DIR");
 fn bench_logic_query() {
@@ -3675,14 +3679,14 @@ fn bench_logic_query() {
     let mut expr_buf = vec![];
     std::fs::File::open(format!("{PROJECT_PATH}/resources/big.metta")).unwrap().read_to_end(&mut expr_buf).unwrap();
     s.add_all_sexpr(&expr_buf[..]).unwrap();
-    let axiom_count = s.btm.val_count();
+    let axiom_count = s.btm.lock().unwrap().val_count();
 
     let mut t0 = Instant::now();
     s.add_all_sexpr(b"(exec 0 (, (axiom $x) (axiom $x)) (, (combined $x)))")
         .unwrap();
     s.metta_calculus(1);
     println!("combined elapsed {} ms size {}",
-        t0.elapsed().as_millis(), s.btm.val_count() - axiom_count);
+        t0.elapsed().as_millis(), s.btm.lock().unwrap().val_count() - axiom_count);
 
     let mut t1 = Instant::now();
     s.add_all_sexpr(
@@ -3691,7 +3695,7 @@ fn bench_logic_query() {
     .unwrap();
     s.metta_calculus(1);
     println!("reversed elapsed {} ms size {}",
-        t1.elapsed().as_millis(), s.btm.val_count() - axiom_count);
+        t1.elapsed().as_millis(), s.btm.lock().unwrap().val_count() - axiom_count);
     
     // yikes, this is much slower than the old bidirectional transition in `server`?
     // combined elapsed 236156 ms size 1677208
@@ -3713,7 +3717,7 @@ fn bench_logic_query_act() {
     println!(
         "combined elapsed {} ms size {}",
         t0.elapsed().as_millis(),
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut t1 = Instant::now();
@@ -3722,7 +3726,7 @@ fn bench_logic_query_act() {
     println!(
         "reversed elapsed {} ms size {}",
         t1.elapsed().as_millis(),
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 }
 
@@ -3771,7 +3775,7 @@ fn bc0() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3824,7 +3828,7 @@ fn bc1() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3906,7 +3910,7 @@ fn bc2() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -3988,7 +3992,7 @@ fn bc3() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -4080,7 +4084,7 @@ fn bench_cm0(to_copy: usize) {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v_ts = vec![];
@@ -4100,156 +4104,157 @@ fn bench_cm0(to_copy: usize) {
     assert!(res.contains(format!("({} {})", last_ts, peano(to_copy)).as_str()));
 }
 
-fn bench_was() {
-    use pathmap::zipper::{ReadZipperTracked, ZipperIteration, ZipperValues};
-    use rand::seq::IndexedRandom;
-    use std::sync::Arc;
-    use weighted_atom_sweep::{
-        AtomHeader, AtomPosition, Operation, OperationObserver, TraversalEngine, TraversalError,
-        WeightedAtomSweep, WeightedAtomSweepSettings,
-    };
-
-    #[derive(Debug, Clone, Default)]
-    pub struct SpaceRef {
-        pub atom_id: u64,
-        pub weight: f64,
-        pub visited_count: u64,
-    }
-
-    impl AtomHeader for SpaceRef {}
-
-    let mut s = Space::new();
-
-    let space_url = "https://raw.githubusercontent.com/Adam-Vandervorst/metta-examples/refs/heads/main/aunt-kg/simpsons.metta";
-
-    let output = std::process::Command::new("curl")
-        .args(&["-s", "-L", space_url])
-        .output()
-        .expect("Failed to execute curl command");
-
-    if !output.status.success() {
-        panic!(
-            "Failed to fetch space URL: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    s.add_all_sexpr(&output.stdout).unwrap();
-    println!("Space loaded with {} atoms", s.btm.val_count());
-
-    // Helper function to collect all paths from a zipper
-    fn collect_all_paths<H: AtomHeader>(mut z: ReadZipperTracked<H>) -> Vec<(Vec<u8>, H)> {
-        let mut results = Vec::new();
-
-        // Start from first value
-        if !z.to_next_val() {
-            return results;
-        }
-
-        // Collect first value
-        if let Some(header) = z.val() {
-            results.push((z.path().to_vec(), header.clone()));
-        }
-
-        // Collect remaining values
-        while z.to_next_val() {
-            if let Some(header) = z.val() {
-                results.push((z.path().to_vec(), header.clone()));
-            }
-        }
-
-        results
-    }
-
-    // Traversal engine that randomly samples atoms
-    fn random_sampler(z: ReadZipperTracked<SpaceRef>) -> Result<AtomPosition, TraversalError> {
-        let paths = collect_all_paths(z);
-        if paths.is_empty() {
-            return Err(TraversalError {});
-        }
-        // Randomly select one
-        let mut rng = rand::rng();
-        let selected: Vec<u8> = paths
-            .choose(&mut rng)
-            .map(|(p, _)| p.clone())
-            .unwrap_or_default();
-        Ok(selected)
-    }
-
-    // Traversal engine that samples weighted by visit count (prioritizes less visited)
-    fn weighted_sampler(z: ReadZipperTracked<SpaceRef>) -> Result<AtomPosition, TraversalError> {
-        let paths = collect_all_paths(z);
-        if paths.is_empty() {
-            return Err(TraversalError {});
-        }
-        // Sort by visited_count (ascending) and pick from least visited
-        let min_visited = paths
-            .iter()
-            .map(|(_, h)| h.visited_count)
-            .min()
-            .unwrap_or(0);
-        let least_visited: Vec<Vec<u8>> = paths
-            .into_iter()
-            .filter(|(_, h)| h.visited_count == min_visited)
-            .map(|(p, _)| p)
-            .collect();
-
-        let mut rng = rand::rng();
-        let selected = least_visited.choose(&mut rng).cloned().unwrap_or_default();
-        Ok(selected)
-    }
-
-    // Operations that simulate work on subspaces
-    fn analyze_atom(atom: Arc<AtomPosition>) {
-        // Simulate analysis work on the atom
-        let path_len = atom.len();
-        std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
-    }
-
-    fn transform_atom(atom: Arc<AtomPosition>) {
-        // Simulate transformation work
-        std::thread::sleep(std::time::Duration::from_micros(50));
-    }
-
-    fn validate_atom(atom: Arc<AtomPosition>) {
-        // Simulate validation work
-        std::thread::sleep(std::time::Duration::from_micros(30));
-    }
-
-    // Create the sweep
-    let mut sweep = WeightedAtomSweep::<SpaceRef>::new(WeightedAtomSweepSettings::default());
-
-    // Add first engine: random sampling
-    let engine1 = TraversalEngine::new("random_sampler", random_sampler);
-    let process1 = sweep.add_engine(engine1);
-
-    let analyze_op = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
-    let transform_op = Operation::new("transform", &(transform_atom as fn(Arc<AtomPosition>)));
-
-    process1.subscribe(analyze_op);
-    process1.subscribe(transform_op);
-
-    // Add second engine: weighted sampling
-    let engine2 = TraversalEngine::new("weighted_sampler", weighted_sampler);
-    let process2 = sweep.add_engine(engine2);
-
-    let validate_op = Operation::new("validate", &(validate_atom as fn(Arc<AtomPosition>)));
-    let analyze_op2 = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
-
-    process2.subscribe(validate_op);
-    process2.subscribe(analyze_op2);
-
-    // Spawn and run for a limited time
-    let controller = sweep.spawn();
-
-    // Let it run for 5 seconds
-    std::thread::sleep(std::time::Duration::from_secs(5));
-
-    let result = controller.shutdown();
-    assert!(result.is_ok(), "sweep shutdown should succeed");
-
-    println!("bench_was completed successfully");
-}
+// =============== becnh by sura =================================
+// fn bench_was() {
+//     use pathmap::zipper::{ReadZipperTracked, ZipperIteration, ZipperValues};
+//     use rand::seq::IndexedRandom;
+//     use std::sync::Arc;
+//     use weighted_atom_sweep::{
+//         AtomHeader, AtomPosition, Operation, OperationObserver, TraversalEngine, TraversalError,
+//         WeightedAtomSweep, WeightedAtomSweepSettings,
+//     };
+//
+//     #[derive(Debug, Clone, Default)]
+//     pub struct SpaceRef {
+//         pub atom_id: u64,
+//         pub weight: f64,
+//         pub visited_count: u64,
+//     }
+//
+//     impl AtomHeader for SpaceRef {}
+//
+//     let mut s = Space::new();
+//
+//     let space_url = "https://raw.githubusercontent.com/Adam-Vandervorst/metta-examples/refs/heads/main/aunt-kg/simpsons.metta";
+//
+//     let output = std::process::Command::new("curl")
+//         .args(&["-s", "-L", space_url])
+//         .output()
+//         .expect("Failed to execute curl command");
+//
+//     if !output.status.success() {
+//         panic!(
+//             "Failed to fetch space URL: {}",
+//             String::from_utf8_lossy(&output.stderr)
+//         );
+//     }
+//
+//     s.add_all_sexpr(&output.stdout).unwrap();
+//     println!("Space loaded with {} atoms", s.btm.val_count());
+//
+//     // Helper function to collect all paths from a zipper
+//     fn collect_all_paths<H: AtomHeader>(mut z: ReadZipperTracked<H>) -> Vec<(Vec<u8>, H)> {
+//         let mut results = Vec::new();
+//
+//         // Start from first value
+//         if !z.to_next_val() {
+//             return results;
+//         }
+//
+//         // Collect first value
+//         if let Some(header) = z.val() {
+//             results.push((z.path().to_vec(), header.clone()));
+//         }
+//
+//         // Collect remaining values
+//         while z.to_next_val() {
+//             if let Some(header) = z.val() {
+//                 results.push((z.path().to_vec(), header.clone()));
+//             }
+//         }
+//
+//         results
+//     }
+//
+//     // Traversal engine that randomly samples atoms
+//     fn random_sampler(z: ReadZipperTracked<SpaceRef>) -> Result<AtomPosition, TraversalError> {
+//         let paths = collect_all_paths(z);
+//         if paths.is_empty() {
+//             return Err(TraversalError {});
+//         }
+//         // Randomly select one
+//         let mut rng = rand::rng();
+//         let selected: Vec<u8> = paths
+//             .choose(&mut rng)
+//             .map(|(p, _)| p.clone())
+//             .unwrap_or_default();
+//         Ok(selected)
+//     }
+//
+//     // Traversal engine that samples weighted by visit count (prioritizes less visited)
+//     fn weighted_sampler(z: ReadZipperTracked<SpaceRef>) -> Result<AtomPosition, TraversalError> {
+//         let paths = collect_all_paths(z);
+//         if paths.is_empty() {
+//             return Err(TraversalError {});
+//         }
+//         // Sort by visited_count (ascending) and pick from least visited
+//         let min_visited = paths
+//             .iter()
+//             .map(|(_, h)| h.visited_count)
+//             .min()
+//             .unwrap_or(0);
+//         let least_visited: Vec<Vec<u8>> = paths
+//             .into_iter()
+//             .filter(|(_, h)| h.visited_count == min_visited)
+//             .map(|(p, _)| p)
+//             .collect();
+//
+//         let mut rng = rand::rng();
+//         let selected = least_visited.choose(&mut rng).cloned().unwrap_or_default();
+//         Ok(selected)
+//     }
+//
+//     // Operations that simulate work on subspaces
+//     fn analyze_atom(atom: Arc<AtomPosition>) {
+//         // Simulate analysis work on the atom
+//         let path_len = atom.len();
+//         std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
+//     }
+//
+//     fn transform_atom(atom: Arc<AtomPosition>) {
+//         // Simulate transformation work
+//         std::thread::sleep(std::time::Duration::from_micros(50));
+//     }
+//
+//     fn validate_atom(atom: Arc<AtomPosition>) {
+//         // Simulate validation work
+//         std::thread::sleep(std::time::Duration::from_micros(30));
+//     }
+//
+//     // Create the sweep
+//     let mut sweep = WeightedAtomSweep::<SpaceRef>::new(WeightedAtomSweepSettings::default());
+//
+//     // Add first engine: random sampling
+//     let engine1 = TraversalEngine::new("random_sampler", random_sampler);
+//     let process1 = sweep.add_engine(engine1);
+//
+//     let analyze_op = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
+//     let transform_op = Operation::new("transform", &(transform_atom as fn(Arc<AtomPosition>)));
+//
+//     process1.subscribe(analyze_op);
+//     process1.subscribe(transform_op);
+//
+//     // Add second engine: weighted sampling
+//     let engine2 = TraversalEngine::new("weighted_sampler", weighted_sampler);
+//     let process2 = sweep.add_engine(engine2);
+//
+//     let validate_op = Operation::new("validate", &(validate_atom as fn(Arc<AtomPosition>)));
+//     let analyze_op2 = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
+//
+//     process2.subscribe(validate_op);
+//     process2.subscribe(analyze_op2);
+//
+//     // Spawn and run for a limited time
+//     let controller = sweep.spawn();
+//
+//     // Let it run for 5 seconds
+//     std::thread::sleep(std::time::Duration::from_secs(5));
+//
+//     let result = controller.shutdown();
+//     assert!(result.is_ok(), "sweep shutdown should succeed");
+//
+//     println!("bench_was completed successfully");
+// }
 
 fn becnh_random() {
     use pathmap::zipper::{ReadZipperTracked, ZipperIteration, ZipperValues};
@@ -4288,11 +4293,11 @@ fn becnh_random() {
     }
 
     s.add_all_sexpr(&output.stdout).unwrap();
-    println!("Space loaded with {} atoms", s.btm.val_count());
+    println!("Space loaded with {} atoms", s.btm.lock().unwrap().val_count());
 
-    fn analyze_atom(atom: Arc<AtomPosition>) {
+    fn analyze_atom(atom: &mut WriteZipperTracked<U64AtomHeader>, val: &[u8]) {
         // Simulate analysis work on the atom
-        let path_len = atom.len();
+        let path_len = atom.val().unwrap().0;
         std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
     }
 
@@ -4302,7 +4307,7 @@ fn becnh_random() {
     let engine1 = TraversalEngine::<U64AtomHeader>::new("random_sampler", next_atom);
     let process1 = sweep.add_engine(engine1);
 
-    let analyze_op = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
+    let analyze_op = Operation::new("analyze", analyze_atom as fn(&mut WriteZipperTracked<U64AtomHeader>, &[u8]));
 
     process1.subscribe(analyze_op);
 
@@ -4952,7 +4957,7 @@ fn ctl() {
 
     let mut t0 = Instant::now();
     let steps = s.metta_calculus(1000000000000000);
-    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.val_count());
+    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.lock().unwrap().val_count());
 
     let mut v = vec![];
     s.dump_all_sexpr(&mut v).unwrap();
@@ -5008,7 +5013,7 @@ fn lens_aunt() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -5042,7 +5047,7 @@ fn lens_composition() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -5182,7 +5187,7 @@ fn bench_clique_no_unify(nnodes: usize, nedges: usize, max_clique: usize) {
         s.add_sexpr(query.as_bytes(), expr!(s, "$"), expr!(s, "_1"));
         s.metta_calculus(1);
         let nkcliques: usize = s
-            .btm
+            .btm.lock().unwrap()
             .read_zipper_at_path([item_byte(Tag::Arity((k + 1) as _))])
             .val_count();
         println!(
@@ -5281,7 +5286,7 @@ fn bench_finite_domain(terms: usize) {
     s.dump_sexpr(expr!(s, "[2] res $"), expr!(s, "_1"), &mut v);
     let res = String::from_utf8_lossy_owned(v);
 
-    println!("{}", s.btm.val_count());
+    println!("{}", s.btm.lock().unwrap().val_count());
     println!(
         "{res} ({terms} inputs) in {} µs",
         t1.duration_since(t0).as_micros()
@@ -5568,7 +5573,7 @@ fn exponential(max_steps: usize) {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 }
 
@@ -5608,7 +5613,7 @@ fn exponential_fringe(steps: usize) {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     // let mut v = vec![];
@@ -5654,7 +5659,7 @@ fn linear_fringe_alternating(steps: usize) {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     // let mut v = vec![];
@@ -5700,7 +5705,7 @@ fn linear_alternating(steps: usize) {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     // let mut v = vec![];
@@ -5782,7 +5787,7 @@ fn test_memory_size() {
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
         steps,
-        s.btm.val_count()
+        s.btm.lock().unwrap().val_count()
     );
 
     let mut v = vec![];
@@ -5908,7 +5913,7 @@ fn mm1_forward() {
             continue;
         } // comment out if you want the analysis at every step
 
-        println!("space size {}", s.btm.val_count());
+        println!("space size {}", s.btm.lock().unwrap().val_count());
         let total_t = t0.elapsed();
 
         let mut tmut = Vec::new();
@@ -6131,7 +6136,7 @@ fn mm2_bc() {
 
         // if n == 1 { continue } // comment out if you want the analysis at every step
 
-        println!("space size {}", s.btm.val_count());
+        println!("space size {}", s.btm.lock().unwrap().val_count());
         let total_t = t0.elapsed();
 
         let mut buf = Vec::new();
@@ -6345,7 +6350,7 @@ fn mm2_bc_v3() {
             unsafe { transitions }
         );
 
-        println!("space size {}", s.btm.val_count());
+        println!("space size {}", s.btm.lock().unwrap().val_count());
 
         let mut buf = Vec::new();
         s.dump_all_sexpr(&mut buf).unwrap();
@@ -6460,6 +6465,12 @@ enum Commands {
         input_path: String,
         output_path: Option<String>,
     },
+    Exp {
+        input_path: String,
+        #[arg(long, default_value_t = 1000000000000000)]
+        steps: usize,
+        output_path: Option<String>,
+    }
 }
 
 fn main() {
@@ -6530,7 +6541,7 @@ fn main() {
                     "logic_query" => bench_logic_query(),
                     "logic_query_act" => bench_logic_query_act(),
                     "flybase" => bench_flybase(),
-                    "was" => bench_was(),
+                    // "was" => bench_was(),
                     "tile_puzzle_states" => bench_tile_puzzle_states(),
                     s => {
                         println!("bench not known: {s}")
@@ -6631,7 +6642,7 @@ fn main() {
                 s.add_all_sexpr(&*mmapf);
             }
             if instrumentation > 0 {
-                println!("loaded {} expressions", s.btm.val_count())
+                println!("loaded {} expressions", s.btm.lock().unwrap().val_count())
             }
             println!(
                 "loaded {:?} ; running and outputing to {:?}",
@@ -6648,7 +6659,7 @@ fn main() {
                 unsafe { transitions }
             );
             if instrumentation > 0 {
-                println!("dumping {} expressions", s.btm.val_count())
+                println!("dumping {} expressions", s.btm.lock().unwrap().val_count())
             }
             if output_path.is_none() {
                 let mut v = vec![];
@@ -6660,6 +6671,63 @@ fn main() {
                 let mut w = std::io::BufWriter::new(f);
                 s.dump_all_sexpr(&mut w).unwrap();
             }
+        }
+        Commands::Exp {
+            input_path,
+            steps,
+            output_path,
+        } => {
+            #[cfg(debug_assertions)]
+            println!("WARNING running in debug, if unintentional, build with --release");
+
+            let wsp = init_weight();
+            GLOBAL_WS_SWEEP.set(Arc::new(wsp));
+
+            let mut s = Space::new();
+            let f = std::fs::File::open(&input_path).unwrap();
+            let mmapf = unsafe { memmap2::Mmap::map(&f).unwrap() };
+            s.add_all_sexpr(&*mmapf);
+            println!(
+                "loaded {:?} ; running and outputing to {:?}",
+                &input_path,
+                output_path.as_ref().or(Some(&"stdout".to_string()))
+            );
+            let t0 = Instant::now();
+            let mut performed = s.metta_calculus(steps);
+
+            
+
+            let map = GLOBAL_WS_SWEEP.get().unwrap().map.inner.clone();
+            map.write_zipper_at_exclusive_path(&[]).unwrap().set_val(U64AtomHeader(0));
+            map.write_zipper_at_exclusive_path(b"foo 1").unwrap().set_val(U64AtomHeader(2));
+            map.write_zipper_at_exclusive_path(b"foo 2").unwrap().set_val(U64AtomHeader(2));
+            map.write_zipper_at_exclusive_path(b"foo 3").unwrap().set_val(U64AtomHeader(2));
+            map.write_zipper_at_exclusive_path(b"bar 1").unwrap().set_val(U64AtomHeader(10));
+            map.write_zipper_at_exclusive_path(b"bar 2").unwrap().set_val(U64AtomHeader(10));
+            map.write_zipper_at_exclusive_path(b"bar 3").unwrap().set_val(U64AtomHeader(10));
+            let z = map.read_zipper_at_path(&[]).unwrap();
+            println!("strating Traversal Via next_atom");
+            let val = next_atom(z).unwrap();
+
+            println!("val {:?}", val);
+            println!(
+                "executing {performed} steps took {} ms (unifications {}, writes {}, transitions {})",
+                t0.elapsed().as_millis(),
+                unsafe { unifications },
+                unsafe { writes },
+                unsafe { transitions }
+            );
+            if output_path.is_none() {
+                let mut v = vec![];
+                s.dump_all_sexpr(&mut v).unwrap();
+                let res = String::from_utf8_lossy_owned(v);
+                println!("result:\n{res}");
+            } else {
+                let f = std::fs::File::create(&output_path.unwrap()).unwrap();
+                let mut w = std::io::BufWriter::new(f);
+                s.dump_all_sexpr(&mut w).unwrap();
+            }
+            
         }
         Commands::Convert {
             input_format,
@@ -6710,7 +6778,7 @@ fn main() {
                     }
                     println!("done loading in memory");
                     if instrumentation > 0 {
-                        println!("dumping {} expressions", s.btm.val_count())
+                        println!("dumping {} expressions", s.btm.lock().unwrap().val_count())
                     }
 
                     match output_format.as_str() {
@@ -6737,7 +6805,7 @@ fn main() {
                     s.restore_paths(&input_path);
                     println!("done loading in memory");
                     if instrumentation > 0 {
-                        println!("dumping {} expressions", s.btm.val_count())
+                        println!("dumping {} expressions", s.btm.lock().unwrap().val_count())
                     }
 
                     match output_format.as_str() {
@@ -6765,7 +6833,7 @@ fn main() {
                     s.load_json(&*mmapf);
                     println!("done loading in memory");
                     if instrumentation > 0 {
-                        println!("dumping {} expressions", s.btm.val_count())
+                        println!("dumping {} expressions", s.btm.lock().unwrap().val_count())
                     }
 
                     match output_format.as_str() {

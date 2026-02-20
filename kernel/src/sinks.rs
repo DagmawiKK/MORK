@@ -10,7 +10,7 @@ use std::mem::MaybeUninit;
 use std::ops::{Coroutine, CoroutineState};
 use std::pin::Pin;
 use std::ptr::{addr_of, null, null_mut, slice_from_raw_parts, slice_from_raw_parts_mut};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::task::Poll;
 use std::time::Instant;
 use futures::StreamExt;
@@ -29,6 +29,7 @@ use eval_ffi::ExprSource;
 use mork_expr::macros::SerializableExpr;
 use crate::pure;
 use crate::space::ACT_PATH;
+use crate::weightedsweep::{ GLOBAL_WS_SWEEP, init_weight, U64AtomHeader };
 
 #[derive(Eq, PartialEq, Debug)]
 pub(crate) enum WriteResourceRequest {
@@ -160,6 +161,51 @@ impl Sink for AddSink {
     fn finalize<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k>>>(&mut self, it: It) -> bool where 'a : 'w, 'k : 'w {
         trace!(target: "sink", "+ finalizing");
         self.changed
+    }
+}
+
+struct WsSink { e: Expr, skip: usize, delta: i32 }
+impl Sink for WsSink {
+    fn new(e: Expr) -> Self {
+        let mut ez = ExprZipper::new(e); ez.next(); ez.next();
+        let max_s = ez.item().err().expect("cnt can not be an expression or variable");
+        let delta: i32 = str::from_utf8(max_s).expect("string encoded numbers for now").parse().expect("a number");
+        WsSink { e, skip: 1 + 1+2 + 1+max_s.len() , delta }
+    }
+
+    fn request(&self) ->  impl Iterator<Item=WriteResourceRequest> {
+        let p = &unsafe { self.e.prefix().unwrap_or_else(|x| { let s = self.e.span(); slice_from_raw_parts(self.e.ptr, s.len() - 1) }).as_ref().unwrap() }[4..];
+        trace!(target: "sink", "count requesting {}", serialize(p));
+        if let Some(wsweep) = GLOBAL_WS_SWEEP.get() {
+            trace!(target: "sink", "WSP available");
+        } else {
+            let wsp = init_weight();
+            GLOBAL_WS_SWEEP.set(Arc::new(wsp));
+            trace!(target: "sink", "create wsp");
+        }
+        std::iter::once(WriteResourceRequest::BTM(p))
+    }
+
+    fn sink<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k>>>(&mut self, mut it: It, path: &[u8]) where 'a : 'w, 'k : 'w {
+        let current_thread = std::thread::current().id();
+        trace!(target: "sink", "ACT sinking '{}' {:?}", serialize(path), current_thread);
+        if let Some(wsweep) = crate::weightedsweep::GLOBAL_WS_SWEEP.get() {
+            let WriteResource::BTM(wz) = it.next().unwrap() else { unreachable!() };
+            let mpath = &path[self.skip..];
+            let wmap = wsweep.map.inner.clone(); // read_zipper_at_path(mpath).unwrap();
+            trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
+            trace!(target: "sink", "ws sinking '{}'", serialize(mpath));
+            let curr = wmap.read_zipper_at_path(mpath).unwrap().val().unwrap_or(&U64AtomHeader::default()).0;
+            &wmap.write_zipper_at_exclusive_path(mpath).unwrap().set_val(U64AtomHeader(curr + self.delta));
+            trace!(target: "sink", "ws finalizing {:?} at {:?}", 
+                &wmap.read_zipper_at_path(mpath).unwrap().val().unwrap_or(&U64AtomHeader::default()).0, serialize(mpath));
+        } else {
+            trace!(target: "sink", "create wsp");
+        };
+    }
+
+    fn finalize<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k>>>(&mut self, mut it: It) -> bool where 'a : 'w, 'k : 'w {
+        true
     }
 }
 
@@ -1042,7 +1088,8 @@ pub enum ASink { AddSink(AddSink), RemoveSink(RemoveSink), HeadSink(HeadSink), C
     Z3Sink(Z3Sink),
     AUSink(AUSink),
     USink(USink),
-    CompatSink(CompatSink)
+    CompatSink(CompatSink),
+    WsSink(WsSink)
 }
 
 impl ASink {
@@ -1079,6 +1126,9 @@ impl Sink for ASink {
         } else if unsafe { *e.ptr == item_byte(Tag::Arity(3)) && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(3)) &&
             *e.ptr.offset(2) == b'A' && *e.ptr.offset(3) == b'C' && *e.ptr.offset(4) == b'T' } {
             return ASink::ACTSink(ACTSink::new(e));
+        } else if unsafe { *e.ptr == item_byte(Tag::Arity(3)) && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(2)) &&
+            *e.ptr.offset(2) == b'w' && *e.ptr.offset(3) == b's' } {
+            return ASink::WsSink(WsSink::new(e));
         } else if unsafe { *e.ptr == item_byte(Tag::Arity(3)) && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(4)) &&
             *e.ptr.offset(2) == b'w' && *e.ptr.offset(3) == b'a' && *e.ptr.offset(4) == b's' && *e.ptr.offset(5) == b'm' } {
             #[cfg(feature = "wasm")]
@@ -1122,6 +1172,7 @@ impl Sink for ASink {
                 #[cfg(feature = "z3")]
                 ASink::Z3Sink(s) => { for i in s.request().into_iter() { yield i } }
                 ASink::CompatSink(s) => { for i in s.request().into_iter() { yield i } }
+                ASink::WsSink(s) => {for i in s.request().into_iter() { yield i } }
             }
         }
     }
@@ -1144,6 +1195,7 @@ impl Sink for ASink {
             #[cfg(feature = "z3")]
             ASink::Z3Sink(s) => { s.sink(it, path) }
             ASink::CompatSink(s) => { s.sink(it, path) }
+            ASink::WsSink(s) => { s.sink(it, path) }
         }
     }
 
@@ -1166,6 +1218,7 @@ impl Sink for ASink {
             #[cfg(feature = "z3")]
             ASink::Z3Sink(s) => { s.finalize(it) }
             ASink::CompatSink(s) => { s.finalize(it) }
+            ASink::WsSink(s) => { s.finalize(it) }
         }
     }
 }
