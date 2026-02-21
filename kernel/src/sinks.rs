@@ -28,6 +28,8 @@ use eval::EvalScope;
 use eval_ffi::ExprSource;
 use mork_expr::macros::SerializableExpr;
 use crate::pure;
+use crate::weightedsweep::{GLOBAL_WS_SWEEP, U64AtomHeader, init_weight};
+use std::str;
 use crate::space::ACT_PATH;
 
 #[derive(Eq, PartialEq, Debug)]
@@ -1033,6 +1035,53 @@ impl Sink for Z3Sink {
 }
 
 
+pub struct WsSink { e: Expr, skip: usize, delta: u64 }
+impl Sink for WsSink {
+    fn new(e: Expr) -> Self {
+        let mut ez = ExprZipper::new(e); ez.next(); ez.next();
+        let max_s = ez.item().err().expect("cnt can not be an expression or variable");
+        let delta: u64 = str::from_utf8(max_s).expect("string encoded numbers for now").parse().expect("a number");
+        WsSink { e, skip: 1 + 1+2 + 1+max_s.len() , delta }
+    }
+
+    fn request(&self) ->  impl Iterator<Item=WriteResourceRequest> {
+        let p = &unsafe { self.e.prefix().unwrap_or_else(|x| { let s = self.e.span(); slice_from_raw_parts(self.e.ptr, s.len() - 1) }).as_ref().unwrap() }[4..];
+        trace!(target: "sink", "ws requesting {}", serialize(p));
+        if let Some(_) = GLOBAL_WS_SWEEP.get() {
+            trace!(target: "sink", "WSP available");
+        } else {
+            let wsp = init_weight();
+            GLOBAL_WS_SWEEP.set(std::sync::Arc::new(wsp));
+            trace!(target: "sink", "create wsp");
+        }
+        std::iter::once(WriteResourceRequest::BTM(p))
+    }
+
+    fn sink<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k>>>(&mut self, mut it: It, path: &[u8]) where 'a : 'w, 'k : 'w {
+        let current_thread = std::thread::current().id();
+        trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(path), serialize(path));
+        if let Some(wsweep) = GLOBAL_WS_SWEEP.get() {
+            let WriteResource::BTM(wz) = it.next().unwrap() else { unreachable!() };
+            let mpath = &path[self.skip..];
+            let wmap = &wsweep.map;
+            trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
+            trace!(target: "sink", "ws sinking '{}'", serialize(mpath));
+            let curr = wmap.get_val(mpath).unwrap_or(U64AtomHeader::default()).0;
+            println!("Setting weight: old: {:?}, delta: {}", curr, self.delta);
+             let _ = &wmap.set_weighted_val(mpath, U64AtomHeader((curr as u64 + self.delta) as i32));
+
+            trace!(target: "sink", "ws finalizing {:?}", wmap.get_val(mpath).unwrap_or(U64AtomHeader::default()).0);
+        } else {
+            trace!(target: "sink", "WSwp missing!");
+        };
+    }
+
+    fn finalize<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k>>>(&mut self, mut it: It) -> bool where 'a : 'w, 'k : 'w {
+        true
+    }
+}
+
+
 pub enum ASink { AddSink(AddSink), RemoveSink(RemoveSink), HeadSink(HeadSink), CountSink(CountSink), HashSink(HashSink), SumSink(SumSink), AndSink(AndSink), ACTSink(ACTSink),
     #[cfg(feature = "wasm")]
     WASMSink(WASMSink),
@@ -1042,7 +1091,8 @@ pub enum ASink { AddSink(AddSink), RemoveSink(RemoveSink), HeadSink(HeadSink), C
     Z3Sink(Z3Sink),
     AUSink(AUSink),
     USink(USink),
-    CompatSink(CompatSink)
+    CompatSink(CompatSink),
+    WsSink(WsSink)
 }
 
 impl ASink {
@@ -1097,6 +1147,8 @@ impl Sink for ASink {
             return ASink::Z3Sink(Z3Sink::new(e));
             #[cfg(not(feature = "z3"))]
             panic!("MORK was not built with the z3 feature, yet trying to call {:?}", e);
+        } else if unsafe { *e.ptr == item_byte(Tag::Arity(3)) && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(2)) && *e.ptr.offset(2) == b'w' && *e.ptr.offset(3) == b's' } {
+            ASink::WsSink(WsSink::new(e))            
         } else {
             panic!("unrecognized sink")
         }
@@ -1122,6 +1174,7 @@ impl Sink for ASink {
                 #[cfg(feature = "z3")]
                 ASink::Z3Sink(s) => { for i in s.request().into_iter() { yield i } }
                 ASink::CompatSink(s) => { for i in s.request().into_iter() { yield i } }
+                ASink::WsSink(s) => { for i in s.request().into_iter() { yield i } }
             }
         }
     }
@@ -1144,6 +1197,7 @@ impl Sink for ASink {
             #[cfg(feature = "z3")]
             ASink::Z3Sink(s) => { s.sink(it, path) }
             ASink::CompatSink(s) => { s.sink(it, path) }
+            ASink::WsSink(s) => { s.sink(it, path) }
         }
     }
 
@@ -1166,6 +1220,7 @@ impl Sink for ASink {
             #[cfg(feature = "z3")]
             ASink::Z3Sink(s) => { s.finalize(it) }
             ASink::CompatSink(s) => { s.finalize(it) }
+            ASink::WsSink(s) => { s.finalize(it) }
         }
     }
 }

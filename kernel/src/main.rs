@@ -4101,7 +4101,7 @@ fn bench_cm0(to_copy: usize) {
 }
 
 fn bench_was() {
-    use pathmap::zipper::{ReadZipperTracked, ZipperIteration, ZipperValues};
+    use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, ZipperIteration, ZipperValues};
     use rand::seq::IndexedRandom;
     use std::sync::Arc;
     use weighted_atom_sweep::{
@@ -4200,18 +4200,22 @@ fn bench_was() {
     }
 
     // Operations that simulate work on subspaces
-    fn analyze_atom(atom: Arc<AtomPosition>) {
+    // fn analyze_atom(atom: Arc<AtomPosition>) { --> I will make this use the updated weighted_atom_sweep with the zipper ////
+    fn analyze_atom(wz: &mut WriteZipperTracked<SpaceRef>, path: &[u8]) {
         // Simulate analysis work on the atom
-        let path_len = atom.len();
+        // let path_len = atom.len(); --> changing to use the path length instead of atom header for simulating work
+        let path_len = path.len();
         std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
     }
 
-    fn transform_atom(atom: Arc<AtomPosition>) {
+    // fn transform_atom(atom: Arc<AtomPosition>) {
+    fn transform_atom(wz: &mut WriteZipperTracked<SpaceRef>, path: &[u8]) {
         // Simulate transformation work
         std::thread::sleep(std::time::Duration::from_micros(50));
     }
 
-    fn validate_atom(atom: Arc<AtomPosition>) {
+    // fn validate_atom(atom: Arc<AtomPosition>) {
+    fn validate_atom(wz: &mut WriteZipperTracked<SpaceRef>, path: &[u8]) {
         // Simulate validation work
         std::thread::sleep(std::time::Duration::from_micros(30));
     }
@@ -4223,8 +4227,10 @@ fn bench_was() {
     let engine1 = TraversalEngine::new("random_sampler", random_sampler);
     let process1 = sweep.add_engine(engine1);
 
-    let analyze_op = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
-    let transform_op = Operation::new("transform", &(transform_atom as fn(Arc<AtomPosition>)));
+    // let analyze_op = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
+    // let transform_op = Operation::new("transform", &(transform_atom as fn(Arc<AtomPosition>)));
+    let analyze_op = Operation::new("analyze", analyze_atom);
+    let transform_op = Operation::new("transform", transform_atom);
 
     process1.subscribe(analyze_op);
     process1.subscribe(transform_op);
@@ -4233,13 +4239,17 @@ fn bench_was() {
     let engine2 = TraversalEngine::new("weighted_sampler", weighted_sampler);
     let process2 = sweep.add_engine(engine2);
 
-    let validate_op = Operation::new("validate", &(validate_atom as fn(Arc<AtomPosition>)));
-    let analyze_op2 = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
+    // let validate_op = Operation::new("validate", &(validate_atom as fn(Arc<AtomPosition>)));
+    // let analyze_op2 = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
+    let validate_op = Operation::new("validate", validate_atom);
+    let analyze_op2 = Operation::new("analyze", analyze_atom);
+
 
     process2.subscribe(validate_op);
     process2.subscribe(analyze_op2);
 
     // Spawn and run for a limited time
+    use log::*;
     let controller = sweep.spawn();
 
     // Let it run for 5 seconds
@@ -4252,14 +4262,14 @@ fn bench_was() {
 }
 
 fn becnh_random() {
-    use pathmap::zipper::{ReadZipperTracked, ZipperIteration, ZipperValues};
+    use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, ZipperIteration, ZipperValues};
     use rand::seq::IndexedRandom;
     use std::sync::Arc;
     use weighted_atom_sweep::{
         AtomHeader, AtomPosition, Operation, OperationObserver, TraversalEngine, TraversalError,
         WeightedAtomSweep, WeightedAtomSweepSettings,
     };
-    use weightedsweep::*;
+    use mork::weightedsweep::*;
 
     #[derive(Debug, Clone, Default)]
     pub struct SpaceRef {
@@ -4290,30 +4300,51 @@ fn becnh_random() {
     s.add_all_sexpr(&output.stdout).unwrap();
     println!("Space loaded with {} atoms", s.btm.val_count());
 
-    fn analyze_atom(atom: Arc<AtomPosition>) {
-        // Simulate analysis work on the atom
-        let path_len = atom.len();
+    // exec patterns to add weighted sweep operations for counting certain patterns in the space
+    const ADD_EXEC: &str = r#"
+    (exec 0 (, (Individuals $x (Surname "Simpson"))) (O (ws 10 (FoundSimpson $x))) )
+    (exec 0 (, (Individuals $x (Sex "F"))) (O (ws 5 (FoundFemale $x))) )
+    (exec 0 (, (Relations $r (Husband $h))) (O (ws 8 (FoundHusband $h))) )
+    (exec 0 (, (Relations $r (Wife $w))) (O (ws 8 (FoundWife $w))) )
+    (exec 0 (, (Individuals $x (Givenname "Homer"))) (O (ws 20 (FoundHomer $x))) )
+    (exec 0 (, (Individuals $x (Givenname "Marge"))) (O (ws 20 (FoundMarge $x))) )
+    (exec 0 (, (Relations $r (Children $c))) (O (ws 15 (FoundChild $c))) )
+    (exec 0 (, (Head $x)) (O (ws 2 (FoundHead $x))) )
+    "#;
+
+    s.add_all_sexpr(ADD_EXEC.as_bytes()).unwrap();
+
+    let mut t0 = std::time::Instant::now();
+    let steps = s.metta_calculus(100);
+    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.val_count());
+
+    fn analyze_atom(wz: &mut WriteZipperTracked<U64AtomHeader>, path: &[u8]) {
+        let path_len = path.len();
         std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
     }
 
     // Create the sweep
     let mut sweep = WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
 
+    // Use the global map if it was populated by WsSink
+    if let Some(global_sweep) = GLOBAL_WS_SWEEP.get() {
+         println!("Using global sweep map with weights");
+         sweep.map.inner = global_sweep.map.inner.clone();
+    } else {
+        println!("GLOBAL_WS_SWEEP not initialized by sinks?");
+    }
+    
     let engine1 = TraversalEngine::<U64AtomHeader>::new("random_sampler", next_atom);
     let process1 = sweep.add_engine(engine1);
-
-    let analyze_op = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
-
+    let analyze_op = Operation::new("analyze", analyze_atom);
     process1.subscribe(analyze_op);
 
     let controller = sweep.spawn();
-
     std::thread::sleep(std::time::Duration::from_secs(5));
-
     let result = controller.shutdown();
     assert!(result.is_ok(), "sweep shutdown should succeed");
 
-    println!("bench_was completed successfully");
+    println!("bench_random completed successfully");
 }
 
 /*fn match_case() {
@@ -6503,6 +6534,7 @@ fn main() {
             for b in selected {
                 println!("=== benchmarking {} ===", b);
                 match b {
+                    "bench_was" => becnh_random(),
                     "counter_machine" => {
                         bench_cm0(50);
                     }
