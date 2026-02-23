@@ -9,3 +9,4 @@ mod sources;
 mod sinks;
 mod pure;
 mod weightedsweep;
+mod weightedsweep_tests;
