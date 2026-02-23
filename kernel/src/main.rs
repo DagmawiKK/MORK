@@ -4253,7 +4253,7 @@ fn bench_was() {
     println!("bench_was completed successfully");
 }
 
-fn becnh_random() {
+fn bench_random() {
     use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, ZipperIteration, ZipperValues};
     use rand::seq::IndexedRandom;
     use std::sync::Arc;
@@ -4262,16 +4262,6 @@ fn becnh_random() {
         WeightedAtomSweep, WeightedAtomSweepSettings,
     };
     use mork::weightedsweep::*;
-
-    #[derive(Debug, Clone, Default)]
-    pub struct SpaceRef {
-        pub atom_id: u64,
-        pub weight: i32,
-        pub visited_count: u64,
-    }
-    
-
-    impl AtomHeader for SpaceRef {}
 
     let mut s = Space::new();
 
@@ -6522,7 +6512,7 @@ fn main() {
             for b in selected {
                 println!("=== benchmarking {} ===", b);
                 match b {
-                    "bench_random" => becnh_random(),
+                    "bench_random" => bench_random(),
                     "counter_machine" => {
                         bench_cm0(50);
                     }
