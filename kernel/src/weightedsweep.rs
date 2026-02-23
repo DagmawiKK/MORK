@@ -330,10 +330,8 @@ impl Default for ChunkedPQTraverse {
     }
 }
 
-impl SweepTransversalEngine<WeightedValue<U64AtomHeader>> for ChunkedPQTraverse {}
-
-impl TransversalEngine<WeightedValue<U64AtomHeader>> for ChunkedPQTraverse {
-    fn next_atom(
+impl ChunkedPQTraverse {
+    pub fn next_atom(
         &self,
         z: ReadZipperTracked<WeightedValue<U64AtomHeader>>,
     ) -> Result<AtomPosition, Infallible> {
