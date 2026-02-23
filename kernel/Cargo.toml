@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+eval = { workspace=true }
+eval-ffi = { workspace=true }
 mork-frontend = { workspace=true }
 mork-expr = { workspace=true }
 mork-interning = { workspace = true }
@@ -22,11 +24,17 @@ serde = { version = "1.0.225", features = ["derive"] }
 wasmtime = { version = "37.0.1", features = ["winch"], optional = true }
 itertools = "0.14.0"
 base64 = "0.22.1"
+hex = "0.4.3"
+subprocess = { version = "0.2.13" }
+weighted-atom-sweep = { workspace = true }
 
 [features]
-default = ["grounding"]
+default = ["grounding", "specialize_io"]
 neo4j = ["dep:neo4rs", "dep:tokio"]
 interning = []
 wasm = ["dep:wasmtime"]
+z3 = []
 no_search = []
 grounding = []
+specialize_io = []
+periodic_merkleize = []
