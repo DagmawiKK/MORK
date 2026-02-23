@@ -23,6 +23,7 @@ use clap::{Args, Parser as CLAParser, Subcommand, ValueEnum};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use weighted_atom_sweep::*;
+use weightedsweep::*;
 
 /*fn main() {
     let mut s = Space::<U64AtomHeader>::new();
@@ -6504,9 +6505,9 @@ fn main() {
             for b in selected {
                 println!("=== benchmarking {} ===", b);
                 match b {
-                    "counter_machine" => {
-                        bench_cm0(50);
-                    }
+                    // "counter_machine" => {
+                    //     bench_cm0(50);
+                    // }
                     "transitive" => {
                         bench_transitive_no_unify(50000, 1000000);
                     }
@@ -6805,23 +6806,6 @@ fn main() {
                 }
             }
         }
-        Commands::WS { input_path } => {
-            println!("🚀 Running WeightedAtomSweep integration tests...");
-
-            // Run our test suite
-            // Note: In a real application, you'd use a proper test framework
-            mork::weightedsweep_tests::tests::test_weighted_atom_sweep_basic_integration();
-            mork::weightedsweep_tests::tests::test_traversal_engine_functionality();
-            mork::weightedsweep_tests::tests::test_concurrent_weighted_map_access();
-            mork::weightedsweep_tests::tests::test_full_weighted_atom_sweep_integration();
-            mork::weightedsweep_tests::tests::test_weight_propagation();
-            mork::weightedsweep_tests::tests::test_weighted_random_distribution();
-            mork::weightedsweep_tests::tests::test_performance_with_large_dataset();
-            mork::weightedsweep_tests::tests::test_error_handling();
-            mork::weightedsweep_tests::tests::test_weighted_map_api();
-
-            println!("✅ All WeightedAtomSweep tests completed!");
-        } 
     }
     return;
 }

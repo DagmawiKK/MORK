@@ -187,7 +187,7 @@ where
 #[derive(Clone, Debug)]
 struct AtomChunk {
     path: AtomPosition, // the path identifying this region (subtree root)
-    score: u64,         // scoring metric (aggregate weight of subtree)
+    score: i32,         // scoring metric (aggregate weight of subtree)
 }
 
 impl Eq for AtomChunk {}
@@ -224,7 +224,7 @@ impl ChunkedPQTraverse {
         }
     }
 
-    pub fn refresh(&self, z: &ReadZipperTracked<WeightedValue<U64AtomHeader>>) {
+    pub fn refresh(&self, z: &ReadZipperTracked<U64AtomHeader>) {
         let mut h = self.heap.lock().unwrap();
         h.clear();
         drop(h);
@@ -235,16 +235,16 @@ impl ChunkedPQTraverse {
 
     fn node_agg_w_local(
         &self,
-        path: ReadZipperUntracked<WeightedValue<U64AtomHeader>>,
-    ) -> Result<u64, Infallible> {
-        let total: Result<u64, Infallible> = path.into_cata_jumping_side_effect_fallible(
+        path: ReadZipperUntracked<U64AtomHeader>,
+    ) -> Result<i32, Infallible> {
+        let total: Result<i32, Infallible> = path.into_cata_jumping_side_effect_fallible(
             |_mask,
-             children: &mut [u64],
+             children: &mut [i32],
              _size,
-             maybe_v: Option<&WeightedValue<U64AtomHeader>>,
+             maybe_v: Option<&U64AtomHeader>,
              _path| {
-                let from_children = children.iter().copied().sum::<u64>();
-                let here = maybe_v.map(|h| h.val).unwrap_or(U64AtomHeader::default()).0;
+                let from_children = children.iter().copied().sum::<i32>();
+                let here = maybe_v.map(|h| h).unwrap_or(&U64AtomHeader::default()).0;
                 Ok(here + from_children)
             },
         );
@@ -278,7 +278,7 @@ impl ChunkedPQTraverse {
     //
     fn collect_atoms_of_length_d(
         &self,
-        mut z: ReadZipperUntracked<WeightedValue<U64AtomHeader>>,
+        mut z: ReadZipperUntracked<U64AtomHeader>,
         cur: usize,
         target_depth: usize,
         heap: &Arc<Mutex<BinaryHeap<AtomChunk>>>,
@@ -323,7 +323,7 @@ impl Default for ChunkedPQTraverse {
 impl ChunkedPQTraverse {
     pub fn next_atom(
         &self,
-        z: ReadZipperTracked<WeightedValue<U64AtomHeader>>,
+        z: ReadZipperTracked<U64AtomHeader>,
     ) -> Result<AtomPosition, Infallible> {
         {
             let mut h = self.heap.lock().unwrap();
