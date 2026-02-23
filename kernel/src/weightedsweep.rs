@@ -240,7 +240,7 @@ impl ChunkedPQTraverse {
         drop(h);
 
         let read_root = z.fork_read_zipper();
-        self.collect_atoms_of_length_d(read_root, self.depth, &self.heap);
+        self.collect_atoms_of_length_d(read_root, 0, self.depth, &self.heap);
     }
 
     fn node_agg_w_local(
@@ -261,27 +261,65 @@ impl ChunkedPQTraverse {
 
         total
     }
-
+    // TODO: verify descend_first_k_path traverses alternative pathes
+    //
+    // fn collect_atoms_of_length_d(
+    //     &self,
+    //     mut z: ReadZipperUntracked<WeightedValue<U64AtomHeader>>,
+    //     target_depth: usize,
+    //     heap: &Arc<Mutex<BinaryHeap<AtomChunk>>>,
+    // ) {
+    //     if z.descend_first_k_path(target_depth) {
+    //         loop {
+    //             if let Some(_) = z.val() {
+    //                 let score = self.node_agg_w_local(z.fork_read_zipper()).unwrap_or(0);
+    //                 heap.lock().unwrap().push(AtomChunk {
+    //                     path: z.origin_path().to_vec(),
+    //                     score,
+    //                 });
+    //             }
+    //
+    //             if !z.to_next_k_path(target_depth) {
+    //                 break;
+    //             }
+    //         }
+    //     }
+    // }
+    //
     fn collect_atoms_of_length_d(
         &self,
         mut z: ReadZipperUntracked<WeightedValue<U64AtomHeader>>,
+        cur: usize,
         target_depth: usize,
         heap: &Arc<Mutex<BinaryHeap<AtomChunk>>>,
     ) {
-        if z.descend_first_k_path(target_depth) {
-            loop {
-                if let Some(_) = z.val() {
-                    let score = self.node_agg_w_local(z.fork_read_zipper()).unwrap_or(0);
-                    heap.lock().unwrap().push(AtomChunk {
-                        path: z.origin_path().to_vec(),
-                        score,
-                    });
-                }
-
-                if !z.to_next_k_path(target_depth) {
-                    break;
-                }
+        if cur == target_depth {
+            if z.val().is_some() {
+                let score = self.node_agg_w_local(z.fork_read_zipper()).unwrap_or(0);
+                heap.lock().unwrap().push(AtomChunk {
+                    path: z.origin_path().to_vec(),
+                    score,
+                });
             }
+            return;
+        }
+
+        // TODO: maybe remove if we dont add incomplete path
+        //
+        if z.child_count() == 0 {
+            let score = self.node_agg_w_local(z.fork_read_zipper()).unwrap_or(0);
+            heap.lock().unwrap().push(AtomChunk {
+                path: z.origin_path().to_vec(),
+                score,
+            });
+            return;
+        }
+
+        for b in z.child_mask().iter() {
+            z.descend_to_byte(b);
+            let child = z.fork_read_zipper();
+            self.collect_atoms_of_length_d(child, cur + 1, target_depth, heap);
+            z.ascend_byte();
         }
     }
 }
@@ -304,7 +342,7 @@ impl TransversalEngine<WeightedValue<U64AtomHeader>> for ChunkedPQTraverse {
             if h.is_empty() {
                 drop(h);
                 let read_root = z.fork_read_zipper();
-                self.collect_atoms_of_length_d(read_root, self.depth, &self.heap);
+                self.collect_atoms_of_length_d(read_root, 0, self.depth, &self.heap);
             }
         }
 
