@@ -4312,6 +4312,10 @@ fn becnh_random() {
     (exec 0 (, (Head $x)) (O (ws 2 (FoundHead $x))) )
     "#;
 
+    let wsp = init_weight();
+    GLOBAL_WS_SWEEP.set(std::sync::Arc::new(wsp));
+
+
     s.add_all_sexpr(ADD_EXEC.as_bytes()).unwrap();
 
     let mut t0 = std::time::Instant::now();
@@ -4325,14 +4329,6 @@ fn becnh_random() {
 
     // Create the sweep
     let mut sweep = WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
-
-    // Use the global map if it was populated by WsSink
-    if let Some(global_sweep) = GLOBAL_WS_SWEEP.get() {
-         println!("Using global sweep map with weights");
-         sweep.map.inner = global_sweep.map.inner.clone();
-    } else {
-        println!("GLOBAL_WS_SWEEP not initialized by sinks?");
-    }
     
     let engine1 = TraversalEngine::<U64AtomHeader>::new("random_sampler", next_atom);
     let process1 = sweep.add_engine(engine1);
@@ -6534,7 +6530,7 @@ fn main() {
             for b in selected {
                 println!("=== benchmarking {} ===", b);
                 match b {
-                    "bench_was" => becnh_random(),
+                    "bench_random" => becnh_random(),
                     "counter_machine" => {
                         bench_cm0(50);
                     }
