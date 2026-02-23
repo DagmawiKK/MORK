@@ -4200,21 +4200,17 @@ fn bench_was() {
     }
 
     // Operations that simulate work on subspaces
-    // fn analyze_atom(atom: Arc<AtomPosition>) { --> I will make this use the updated weighted_atom_sweep with the zipper ////
     fn analyze_atom(wz: &mut WriteZipperTracked<SpaceRef>, path: &[u8]) {
         // Simulate analysis work on the atom
-        // let path_len = atom.len(); --> changing to use the path length instead of atom header for simulating work
         let path_len = path.len();
         std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
     }
 
-    // fn transform_atom(atom: Arc<AtomPosition>) {
     fn transform_atom(wz: &mut WriteZipperTracked<SpaceRef>, path: &[u8]) {
         // Simulate transformation work
         std::thread::sleep(std::time::Duration::from_micros(50));
     }
 
-    // fn validate_atom(atom: Arc<AtomPosition>) {
     fn validate_atom(wz: &mut WriteZipperTracked<SpaceRef>, path: &[u8]) {
         // Simulate validation work
         std::thread::sleep(std::time::Duration::from_micros(30));
@@ -4227,8 +4223,6 @@ fn bench_was() {
     let engine1 = TraversalEngine::new("random_sampler", random_sampler);
     let process1 = sweep.add_engine(engine1);
 
-    // let analyze_op = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
-    // let transform_op = Operation::new("transform", &(transform_atom as fn(Arc<AtomPosition>)));
     let analyze_op = Operation::new("analyze", analyze_atom);
     let transform_op = Operation::new("transform", transform_atom);
 
@@ -4239,8 +4233,6 @@ fn bench_was() {
     let engine2 = TraversalEngine::new("weighted_sampler", weighted_sampler);
     let process2 = sweep.add_engine(engine2);
 
-    // let validate_op = Operation::new("validate", &(validate_atom as fn(Arc<AtomPosition>)));
-    // let analyze_op2 = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
     let validate_op = Operation::new("validate", validate_atom);
     let analyze_op2 = Operation::new("analyze", analyze_atom);
 
