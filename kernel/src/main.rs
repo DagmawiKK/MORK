@@ -1,12 +1,12 @@
 #![feature(string_from_utf8_lossy_owned)]
 mod weightedsweep;
 
-use mork::space::{transitions, unifications, writes, Space, ACT_PATH};
+use mork::space::{ACT_PATH, Space, transitions, unifications, writes};
 use mork::{expr, prefix, sexpr};
-use mork_expr::{item_byte, serialize, SourceItem, Tag};
+use mork_expr::{SourceItem, Tag, item_byte, serialize};
 use mork_frontend::bytestring_parser::Parser;
-use pathmap::zipper::{Zipper, ZipperAbsolutePath, ZipperIteration, ZipperMoving};
 use pathmap::PathMap;
+use pathmap::zipper::{Zipper, ZipperAbsolutePath, ZipperIteration, ZipperMoving};
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -857,7 +857,12 @@ fn issue_43() {
 
     let mut t0 = Instant::now();
     let steps = s.metta_calculus(1000000000000000);
-    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.val_count());
+    println!(
+        "elapsed {} steps {} size {}",
+        t0.elapsed().as_millis(),
+        steps,
+        s.btm.val_count()
+    );
 
     let mut v = vec![];
     s.dump_all_sexpr(&mut v).unwrap();
@@ -3124,7 +3129,12 @@ fn sink_act_mixed_readback() {
 
     let mut t0 = Instant::now();
     let steps = s.metta_calculus(1000000000000000);
-    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.val_count());
+    println!(
+        "elapsed {} steps {} size {}",
+        t0.elapsed().as_millis(),
+        steps,
+        s.btm.val_count()
+    );
 
     {
         let mut s = Space::<U64AtomHeader>::new();
@@ -3153,10 +3163,19 @@ fn source_sink_act_readback() {
 
     let mut t0 = Instant::now();
     let steps = s.metta_calculus(1000000000000000);
-    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.val_count());
+    println!(
+        "elapsed {} steps {} size {}",
+        t0.elapsed().as_millis(),
+        steps,
+        s.btm.val_count()
+    );
 
     let mut v = vec![];
-    s.dump_sexpr(expr!(s, "[4] cuux $ $ $"), expr!(s, "[4] cuux _1 _2 _3"), &mut v);
+    s.dump_sexpr(
+        expr!(s, "[4] cuux $ $ $"),
+        expr!(s, "[4] cuux _1 _2 _3"),
+        &mut v,
+    );
     // s.dump_all_sexpr(&mut v).unwrap();
     let res = String::from_utf8_lossy_owned(v);
 
@@ -3675,7 +3694,10 @@ fn bench_logic_query() {
     let mut s = Space::<U64AtomHeader>::new();
 
     let mut expr_buf = vec![];
-    std::fs::File::open(format!("{PROJECT_PATH}/resources/big.metta")).unwrap().read_to_end(&mut expr_buf).unwrap();
+    std::fs::File::open(format!("{PROJECT_PATH}/resources/big.metta"))
+        .unwrap()
+        .read_to_end(&mut expr_buf)
+        .unwrap();
     s.add_all_sexpr(&expr_buf[..]).unwrap();
     let axiom_count = s.btm.val_count();
 
@@ -3683,8 +3705,11 @@ fn bench_logic_query() {
     s.add_all_sexpr(b"(exec 0 (, (axiom $x) (axiom $x)) (, (combined $x)))")
         .unwrap();
     s.metta_calculus(1);
-    println!("combined elapsed {} ms size {}",
-        t0.elapsed().as_millis(), s.btm.val_count() - axiom_count);
+    println!(
+        "combined elapsed {} ms size {}",
+        t0.elapsed().as_millis(),
+        s.btm.val_count() - axiom_count
+    );
 
     let mut t1 = Instant::now();
     s.add_all_sexpr(
@@ -3692,9 +3717,12 @@ fn bench_logic_query() {
     )
     .unwrap();
     s.metta_calculus(1);
-    println!("reversed elapsed {} ms size {}",
-        t1.elapsed().as_millis(), s.btm.val_count() - axiom_count);
-    
+    println!(
+        "reversed elapsed {} ms size {}",
+        t1.elapsed().as_millis(),
+        s.btm.val_count() - axiom_count
+    );
+
     // yikes, this is much slower than the old bidirectional transition in `server`?
     // combined elapsed 236156 ms size 1677208
     // reversed elapsed 435670 ms size 3348972
@@ -3706,7 +3734,10 @@ fn bench_logic_query_act() {
 
     // let mut expr_buf = vec![];
     // std::fs::File::open(format!("{PROJECT_PATH}/resources/big.act")).unwrap().read_to_end(&mut expr_buf).unwrap();
-    std::fs::copy(format!("{PROJECT_PATH}/resources/big.act"), format!("{}big.act", ACT_PATH));
+    std::fs::copy(
+        format!("{PROJECT_PATH}/resources/big.act"),
+        format!("{}big.act", ACT_PATH),
+    );
 
     let mut t0 = Instant::now();
     s.add_all_sexpr(b"(exec 0 (I (ACT big (axiom $x)) (ACT big (axiom $x))) (, (combined $x)))")
@@ -4016,7 +4047,7 @@ fn bc3() {
 }
 
 fn bench_cm0(to_copy: usize) {
-    let mut s = Space::new();
+    let mut s: Space<U64AtomHeader> = Space::new();
 
     // Follow along https://en.wikipedia.org/wiki/Counter_machine#Program
 
@@ -4120,7 +4151,7 @@ fn bench_was() {
 
     impl AtomHeader for SpaceRef {}
 
-    let mut s = Space::new();
+    let mut s: Space<U64AtomHeader> = Space::new();
 
     let space_url = "https://raw.githubusercontent.com/Adam-Vandervorst/metta-examples/refs/heads/main/aunt-kg/simpsons.metta";
 
@@ -4238,7 +4269,6 @@ fn bench_was() {
     let validate_op = Operation::new("validate", validate_atom);
     let analyze_op2 = Operation::new("analyze", analyze_atom);
 
-
     process2.subscribe(validate_op);
     process2.subscribe(analyze_op2);
 
@@ -4256,6 +4286,7 @@ fn bench_was() {
 }
 
 fn bench_random() {
+    use mork::weightedsweep::*;
     use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, ZipperIteration, ZipperValues};
     use rand::seq::IndexedRandom;
     use std::sync::Arc;
@@ -4263,9 +4294,8 @@ fn bench_random() {
         AtomHeader, AtomPosition, Operation, OperationObserver, TraversalEngine, TraversalError,
         WeightedAtomSweep, WeightedAtomSweepSettings,
     };
-    use mork::weightedsweep::*;
 
-    let mut s = Space::new();
+    let mut s: Space<U64AtomHeader> = Space::new();
 
     let space_url = "https://raw.githubusercontent.com/Adam-Vandervorst/metta-examples/refs/heads/main/aunt-kg/simpsons.metta";
 
@@ -4299,12 +4329,16 @@ fn bench_random() {
     let wsp = init_weight();
     GLOBAL_WS_SWEEP.set(std::sync::Arc::new(wsp));
 
-
     s.add_all_sexpr(ADD_EXEC.as_bytes()).unwrap();
 
     let mut t0 = std::time::Instant::now();
     let steps = s.metta_calculus(100);
-    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.val_count());
+    println!(
+        "elapsed {} steps {} size {}",
+        t0.elapsed().as_millis(),
+        steps,
+        s.btm.val_count()
+    );
 
     fn analyze_atom(wz: &mut WriteZipperTracked<U64AtomHeader>, path: &[u8]) {
         let path_len = path.len();
@@ -4313,7 +4347,7 @@ fn bench_random() {
 
     // Create the sweep
     let mut sweep = WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
-    
+
     let engine1 = TraversalEngine::<U64AtomHeader>::new("random_sampler", next_atom);
     let process1 = sweep.add_engine(engine1);
     let analyze_op = Operation::new("analyze", analyze_atom);
@@ -4963,7 +4997,12 @@ fn ctl() {
 
     let mut t0 = Instant::now();
     let steps = s.metta_calculus(1000000000000000);
-    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.val_count());
+    println!(
+        "elapsed {} steps {} size {}",
+        t0.elapsed().as_millis(),
+        steps,
+        s.btm.val_count()
+    );
 
     let mut v = vec![];
     s.dump_all_sexpr(&mut v).unwrap();
@@ -5065,7 +5104,7 @@ fn lens_composition() {
 }
 
 fn bench_transitive_no_unify(nnodes: usize, nedges: usize) {
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     let mut rng = StdRng::from_seed([0; 32]);
     let mut s = Space::<U64AtomHeader>::new();
 
@@ -5162,7 +5201,7 @@ fn bench_clique_no_unify(nnodes: usize, nedges: usize, max_clique: usize) {
         )
     }
 
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     let mut rng = StdRng::from_seed([0; 32]);
     let mut s = Space::<U64AtomHeader>::new();
 
@@ -5215,7 +5254,7 @@ fn bench_clique_no_unify(nnodes: usize, nedges: usize, max_clique: usize) {
 }
 
 fn bench_finite_domain(terms: usize) {
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     let mut rng = StdRng::from_seed([0; 32]);
     const DS: usize = 64;
     const SYM: [&'static str; 64] = [
