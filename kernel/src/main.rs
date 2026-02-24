@@ -4015,308 +4015,317 @@ fn bc3() {
     // assert!(res.contains("(@ (@ . (@ uncurry ab_c)) (@ (@ curry sym) b))\n"));
 }
 
-// fn bench_cm0(to_copy: usize) {
-//     let mut s = Space::<U64AtomHeader>::new();
-//
-//     // Follow along https://en.wikipedia.org/wiki/Counter_machine#Program
-//
-//     // non-peano csv version see cm1
-//     /*
-//     s.load_csv(INSTRS_CSV.as_bytes(), expr!(s, "$"), expr!(s, "[2] program _1"), b',').unwrap();
-//     s.load_csv(REGS_CSV.as_bytes(), expr!(s, "[2] $ $"), expr!(s, "[3] state 0 [3] REG _1 _2"), b',').unwrap();
-//     JZ,2,5\nDEC,2,2INC,3,3\nINC,1,4\nJZ,0,0\nJZ,1,9\nDEC,1,7\nINC,2,8\nJZ,0,5\nH,0,0
-//      */
-//     let SPACE_MACHINE = format!(
-//         r#"
-//     (program Z (JZ 2 (S (S (S (S (S Z))))) ))
-//     (program (S Z) (DEC 2))
-//     (program (S (S Z)) (INC 3))
-//     (program (S (S (S Z))) (INC 1))
-//     (program (S (S (S (S Z)))) (JZ 0 Z))
-//     (program (S (S (S (S (S Z))))) (JZ 1 (S (S (S (S (S (S (S (S (S Z)))))))))))
-//     (program (S (S (S (S (S (S Z)))))) (DEC 1))
-//     (program (S (S (S (S (S (S (S Z))))))) (INC 2))
-//     (program (S (S (S (S (S (S (S (S Z)))))))) (JZ 0 (S (S (S (S (S Z)))))))
-//     (program (S (S (S (S (S (S (S (S (S Z))))))))) H)
-//     (state Z (REG 0 Z))
-//     (state Z (REG 1 Z))
-//     (state Z (REG 2 {}))
-//     (state Z (REG 3 Z))
-//     (state Z (REG 4 Z))
-//     (state Z (IC Z))
-//     (if (S $n) $x $y $x)
-//     (if Z $x $y $y)
-//     (0 != 1) (0 != 2) (0 != 3) (0 != 4)
-//     (1 != 0) (1 != 2) (1 != 3) (1 != 4)
-//     (2 != 1) (2 != 0) (2 != 3) (2 != 4)
-//     (3 != 1) (3 != 2) (3 != 0) (3 != 4)
-//     (4 != 1) (4 != 2) (4 != 0) (4 != 3)
-//
-//     ((step JZ $ts)
-//       (, (state $ts (IC $i)) (program $i (JZ $r $j)) (state $ts (REG $r $v)) (if $v (S $i) $j $ni) (state $ts (REG $k $kv)))
-//       (, (state (S $ts) (IC $ni)) (state (S $ts) (REG $k $kv))))
-//
-//     ((step INC $ts)
-//       (, (state $ts (IC $i)) (program $i (INC $r)) (state $ts (REG $r $v)) ($r != $o) (state $ts (REG $o $ov)))
-//       (, (state (S $ts) (IC (S $i))) (state (S $ts) (REG $r (S $v))) (state (S $ts) (REG $o $ov))))
-//
-//     ((step DEC $ts)
-//       (, (state $ts (IC $i)) (program $i (DEC $r)) (state $ts (REG $r (S $v))) ($r != $o) (state $ts (REG $o $ov)))
-//       (, (state (S $ts) (IC (S $i))) (state (S $ts) (REG $r $v)) (state (S $ts) (REG $o $ov))))  
-//
-//     (exec (clocked Z)
-//             (, (exec (clocked $ts) $p1 $t1) 
-//                (state $ts (IC $_))
-//                ((step $k $ts) $p0 $t0))
-//             (, (exec ($k $ts) $p0 $t0)
-//                (exec (clocked (S $ts)) $p1 $t1)))
-//     "#,
-//         peano(to_copy)
-//     );
-//
-//     s.add_all_sexpr(SPACE_MACHINE.as_bytes()).unwrap();
-//
-//     let mut t0 = Instant::now();
-//     let steps = s.metta_calculus(1000000000000000);
-//     println!(
-//         "elapsed {} steps {} size {}",
-//         t0.elapsed().as_millis(),
-//         steps,
-//         s.btm.val_count()
-//     );
-//
-//     let mut v_ts = vec![];
-//     s.dump_sexpr(expr!(s, "[3] state $ $"), expr!(s, "_1"), &mut v_ts);
-//     let last_ts_tmp = String::from_utf8(v_ts).unwrap();
-//     let last_ts = last_ts_tmp.split("\n").max_by_key(|x| x.len()).unwrap();
-//     let mut v = vec![];
-//     // s.dump_all_sexpr(&mut v).unwrap();
-//     s.dump_sexpr(
-//         expr!(s, "[3] state $ [3] REG 3 $"),
-//         expr!(s, "[2] _1 _2"),
-//         &mut v,
-//     );
-//     let res = String::from_utf8_lossy_owned(v);
-//
-//     // println!("{res}");
-//     assert!(res.contains(format!("({} {})", last_ts, peano(to_copy)).as_str()));
-// }
-//
-// fn bench_was() {
-//     use pathmap::zipper::{ReadZipperTracked, ZipperIteration, ZipperValues};
-//     use rand::seq::IndexedRandom;
-//     use std::sync::Arc;
-//     use weighted_atom_sweep::{
-//         AtomHeader, AtomPosition, Operation, OperationObserver, TraversalEngine, TraversalError,
-//         WeightedAtomSweep, WeightedAtomSweepSettings,
-//     };
-//
-//     #[derive(Debug, Clone, Default)]
-//     pub struct SpaceRef {
-//         pub atom_id: u64,
-//         pub weight: f64,
-//         pub visited_count: u64,
-//     }
-//
-//     impl AtomHeader for SpaceRef {}
-//
-//     let mut s = Space::<U64AtomHeader>::new();
-//
-//     let space_url = "https://raw.githubusercontent.com/Adam-Vandervorst/metta-examples/refs/heads/main/aunt-kg/simpsons.metta";
-//
-//     let output = std::process::Command::new("curl")
-//         .args(&["-s", "-L", space_url])
-//         .output()
-//         .expect("Failed to execute curl command");
-//
-//     if !output.status.success() {
-//         panic!(
-//             "Failed to fetch space URL: {}",
-//             String::from_utf8_lossy(&output.stderr)
-//         );
-//     }
-//
-//     s.add_all_sexpr(&output.stdout).unwrap();
-//     println!("Space loaded with {} atoms", s.btm.val_count());
-//
-//     // Helper function to collect all paths from a zipper
-//     fn collect_all_paths<H: AtomHeader>(mut z: ReadZipperTracked<H>) -> Vec<(Vec<u8>, H)> {
-//         let mut results = Vec::new();
-//
-//         // Start from first value
-//         if !z.to_next_val() {
-//             return results;
-//         }
-//
-//         // Collect first value
-//         if let Some(header) = z.val() {
-//             results.push((z.path().to_vec(), header.clone()));
-//         }
-//
-//         // Collect remaining values
-//         while z.to_next_val() {
-//             if let Some(header) = z.val() {
-//                 results.push((z.path().to_vec(), header.clone()));
-//             }
-//         }
-//
-//         results
-//     }
-//
-//     // Traversal engine that randomly samples atoms
-//     fn random_sampler(z: ReadZipperTracked<SpaceRef>) -> Result<AtomPosition, TraversalError> {
-//         let paths = collect_all_paths(z);
-//         if paths.is_empty() {
-//             return Err(TraversalError {});
-//         }
-//         // Randomly select one
-//         let mut rng = rand::rng();
-//         let selected: Vec<u8> = paths
-//             .choose(&mut rng)
-//             .map(|(p, _)| p.clone())
-//             .unwrap_or_default();
-//         Ok(selected)
-//     }
-//
-//     // Traversal engine that samples weighted by visit count (prioritizes less visited)
-//     fn weighted_sampler(z: ReadZipperTracked<SpaceRef>) -> Result<AtomPosition, TraversalError> {
-//         let paths = collect_all_paths(z);
-//         if paths.is_empty() {
-//             return Err(TraversalError {});
-//         }
-//         // Sort by visited_count (ascending) and pick from least visited
-//         let min_visited = paths
-//             .iter()
-//             .map(|(_, h)| h.visited_count)
-//             .min()
-//             .unwrap_or(0);
-//         let least_visited: Vec<Vec<u8>> = paths
-//             .into_iter()
-//             .filter(|(_, h)| h.visited_count == min_visited)
-//             .map(|(p, _)| p)
-//             .collect();
-//
-//         let mut rng = rand::rng();
-//         let selected = least_visited.choose(&mut rng).cloned().unwrap_or_default();
-//         Ok(selected)
-//     }
-//
-//     // Operations that simulate work on subspaces
-//     fn analyze_atom(atom: Arc<AtomPosition>) {
-//         // Simulate analysis work on the atom
-//         let path_len = atom.len();
-//         std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
-//     }
-//
-//     fn transform_atom(atom: Arc<AtomPosition>) {
-//         // Simulate transformation work
-//         std::thread::sleep(std::time::Duration::from_micros(50));
-//     }
-//
-//     fn validate_atom(atom: Arc<AtomPosition>) {
-//         // Simulate validation work
-//         std::thread::sleep(std::time::Duration::from_micros(30));
-//     }
-//
-//     // Create the sweep
-//     let mut sweep = WeightedAtomSweep::<SpaceRef>::new(WeightedAtomSweepSettings::default());
-//
-//     // Add first engine: random sampling
-//     let engine1 = TraversalEngine::new("random_sampler", random_sampler);
-//     let process1 = sweep.add_engine(engine1);
-//
-//     let analyze_op = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
-//     let transform_op = Operation::new("transform", &(transform_atom as fn(Arc<AtomPosition>)));
-//
-//     process1.subscribe(analyze_op);
-//     process1.subscribe(transform_op);
-//
-//     // Add second engine: weighted sampling
-//     let engine2 = TraversalEngine::new("weighted_sampler", weighted_sampler);
-//     let process2 = sweep.add_engine(engine2);
-//
-//     let validate_op = Operation::new("validate", &(validate_atom as fn(Arc<AtomPosition>)));
-//     let analyze_op2 = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
-//
-//     process2.subscribe(validate_op);
-//     process2.subscribe(analyze_op2);
-//
-//     // Spawn and run for a limited time
-//     let controller = sweep.spawn();
-//
-//     // Let it run for 5 seconds
-//     std::thread::sleep(std::time::Duration::from_secs(5));
-//
-//     let result = controller.shutdown();
-//     assert!(result.is_ok(), "sweep shutdown should succeed");
-//
-//     println!("bench_was completed successfully");
-// }
+fn bench_cm0(to_copy: usize) {
+    let mut s = Space::new();
 
-// fn becnh_random() {
-//     use pathmap::zipper::{ReadZipperTracked, ZipperIteration, ZipperValues};
-//     use rand::seq::IndexedRandom;
-//     use std::sync::Arc;
-//     use weighted_atom_sweep::{
-//         AtomHeader, AtomPosition, Operation, OperationObserver, TraversalEngine, TraversalError,
-//         WeightedAtomSweep, WeightedAtomSweepSettings,
-//     };
-//     use weightedsweep::*;
-//
-//     #[derive(Debug, Clone, Default)]
-//     pub struct SpaceRef {
-//         pub atom_id: u64,
-//         pub weight: i32,
-//         pub visited_count: u64,
-//     }
-//     
-//
-//     impl AtomHeader for SpaceRef {}
-//
-//     let mut s = Space::<U64AtomHeader>::new();
-//
-//     let space_url = "https://raw.githubusercontent.com/Adam-Vandervorst/metta-examples/refs/heads/main/aunt-kg/simpsons.metta";
-//
-//     let output = std::process::Command::new("curl")
-//         .args(&["-s", "-L", space_url])
-//         .output()
-//         .expect("Failed to execute curl command");
-//
-//     if !output.status.success() {
-//         panic!(
-//             "Failed to fetch space URL: {}",
-//             String::from_utf8_lossy(&output.stderr)
-//         );
-//     }
-//
-//     s.add_all_sexpr(&output.stdout).unwrap();
-//     println!("Space loaded with {} atoms", s.btm.val_count());
-//
-//     fn analyze_atom(atom: Arc<AtomPosition>) {
-//         // Simulate analysis work on the atom
-//         let path_len = atom.len();
-//         std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
-//     }
-//
-//     // Create the sweep
-//     let mut sweep = WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
-//
-//     let engine1 = TraversalEngine::<U64AtomHeader>::new("random_sampler", next_atom);
-//     let process1 = sweep.add_engine(engine1);
-//
-//     let analyze_op = Operation::new("analyze", &(analyze_atom as fn(Arc<AtomPosition>)));
-//
-//     process1.subscribe(analyze_op);
-//
-//     let controller = sweep.spawn();
-//
-//     std::thread::sleep(std::time::Duration::from_secs(5));
-//
-//     let result = controller.shutdown();
-//     assert!(result.is_ok(), "sweep shutdown should succeed");
-//
-//     println!("bench_was completed successfully");
-// }
+    // Follow along https://en.wikipedia.org/wiki/Counter_machine#Program
+
+    // non-peano csv version see cm1
+    /*
+    s.load_csv(INSTRS_CSV.as_bytes(), expr!(s, "$"), expr!(s, "[2] program _1"), b',').unwrap();
+    s.load_csv(REGS_CSV.as_bytes(), expr!(s, "[2] $ $"), expr!(s, "[3] state 0 [3] REG _1 _2"), b',').unwrap();
+    JZ,2,5\nDEC,2,2INC,3,3\nINC,1,4\nJZ,0,0\nJZ,1,9\nDEC,1,7\nINC,2,8\nJZ,0,5\nH,0,0
+     */
+    let SPACE_MACHINE = format!(
+        r#"
+    (program Z (JZ 2 (S (S (S (S (S Z))))) ))
+    (program (S Z) (DEC 2))
+    (program (S (S Z)) (INC 3))
+    (program (S (S (S Z))) (INC 1))
+    (program (S (S (S (S Z)))) (JZ 0 Z))
+    (program (S (S (S (S (S Z))))) (JZ 1 (S (S (S (S (S (S (S (S (S Z)))))))))))
+    (program (S (S (S (S (S (S Z)))))) (DEC 1))
+    (program (S (S (S (S (S (S (S Z))))))) (INC 2))
+    (program (S (S (S (S (S (S (S (S Z)))))))) (JZ 0 (S (S (S (S (S Z)))))))
+    (program (S (S (S (S (S (S (S (S (S Z))))))))) H)
+    (state Z (REG 0 Z))
+    (state Z (REG 1 Z))
+    (state Z (REG 2 {}))
+    (state Z (REG 3 Z))
+    (state Z (REG 4 Z))
+    (state Z (IC Z))
+    (if (S $n) $x $y $x)
+    (if Z $x $y $y)
+    (0 != 1) (0 != 2) (0 != 3) (0 != 4)
+    (1 != 0) (1 != 2) (1 != 3) (1 != 4)
+    (2 != 1) (2 != 0) (2 != 3) (2 != 4)
+    (3 != 1) (3 != 2) (3 != 0) (3 != 4)
+    (4 != 1) (4 != 2) (4 != 0) (4 != 3)
+
+    ((step JZ $ts)
+      (, (state $ts (IC $i)) (program $i (JZ $r $j)) (state $ts (REG $r $v)) (if $v (S $i) $j $ni) (state $ts (REG $k $kv)))
+      (, (state (S $ts) (IC $ni)) (state (S $ts) (REG $k $kv))))
+
+    ((step INC $ts)
+      (, (state $ts (IC $i)) (program $i (INC $r)) (state $ts (REG $r $v)) ($r != $o) (state $ts (REG $o $ov)))
+      (, (state (S $ts) (IC (S $i))) (state (S $ts) (REG $r (S $v))) (state (S $ts) (REG $o $ov))))
+
+    ((step DEC $ts)
+      (, (state $ts (IC $i)) (program $i (DEC $r)) (state $ts (REG $r (S $v))) ($r != $o) (state $ts (REG $o $ov)))
+      (, (state (S $ts) (IC (S $i))) (state (S $ts) (REG $r $v)) (state (S $ts) (REG $o $ov))))  
+
+    (exec (clocked Z)
+            (, (exec (clocked $ts) $p1 $t1) 
+               (state $ts (IC $_))
+               ((step $k $ts) $p0 $t0))
+            (, (exec ($k $ts) $p0 $t0)
+               (exec (clocked (S $ts)) $p1 $t1)))
+    "#,
+        peano(to_copy)
+    );
+
+    s.add_all_sexpr(SPACE_MACHINE.as_bytes()).unwrap();
+
+    let mut t0 = Instant::now();
+    let steps = s.metta_calculus(1000000000000000);
+    println!(
+        "elapsed {} steps {} size {}",
+        t0.elapsed().as_millis(),
+        steps,
+        s.btm.val_count()
+    );
+
+    let mut v_ts = vec![];
+    s.dump_sexpr(expr!(s, "[3] state $ $"), expr!(s, "_1"), &mut v_ts);
+    let last_ts_tmp = String::from_utf8(v_ts).unwrap();
+    let last_ts = last_ts_tmp.split("\n").max_by_key(|x| x.len()).unwrap();
+    let mut v = vec![];
+    // s.dump_all_sexpr(&mut v).unwrap();
+    s.dump_sexpr(
+        expr!(s, "[3] state $ [3] REG 3 $"),
+        expr!(s, "[2] _1 _2"),
+        &mut v,
+    );
+    let res = String::from_utf8_lossy_owned(v);
+
+    // println!("{res}");
+    assert!(res.contains(format!("({} {})", last_ts, peano(to_copy)).as_str()));
+}
+
+fn bench_was() {
+    use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, ZipperIteration, ZipperValues};
+    use rand::seq::IndexedRandom;
+    use std::sync::Arc;
+    use weighted_atom_sweep::{
+        AtomHeader, AtomPosition, Operation, OperationObserver, TraversalEngine, TraversalError,
+        WeightedAtomSweep, WeightedAtomSweepSettings,
+    };
+
+    #[derive(Debug, Clone, Default)]
+    pub struct SpaceRef {
+        pub atom_id: u64,
+        pub weight: f64,
+        pub visited_count: u64,
+    }
+
+    impl AtomHeader for SpaceRef {}
+
+    let mut s = Space::new();
+
+    let space_url = "https://raw.githubusercontent.com/Adam-Vandervorst/metta-examples/refs/heads/main/aunt-kg/simpsons.metta";
+
+    let output = std::process::Command::new("curl")
+        .args(&["-s", "-L", space_url])
+        .output()
+        .expect("Failed to execute curl command");
+
+    if !output.status.success() {
+        panic!(
+            "Failed to fetch space URL: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    s.add_all_sexpr(&output.stdout).unwrap();
+    println!("Space loaded with {} atoms", s.btm.val_count());
+
+    // Helper function to collect all paths from a zipper
+    fn collect_all_paths<H: AtomHeader>(mut z: ReadZipperTracked<H>) -> Vec<(Vec<u8>, H)> {
+        let mut results = Vec::new();
+
+        // Start from first value
+        if !z.to_next_val() {
+            return results;
+        }
+
+        // Collect first value
+        if let Some(header) = z.val() {
+            results.push((z.path().to_vec(), header.clone()));
+        }
+
+        // Collect remaining values
+        while z.to_next_val() {
+            if let Some(header) = z.val() {
+                results.push((z.path().to_vec(), header.clone()));
+            }
+        }
+
+        results
+    }
+
+    // Traversal engine that randomly samples atoms
+    fn random_sampler(z: ReadZipperTracked<SpaceRef>) -> Result<AtomPosition, TraversalError> {
+        let paths = collect_all_paths(z);
+        if paths.is_empty() {
+            return Err(TraversalError {});
+        }
+        // Randomly select one
+        let mut rng = rand::rng();
+        let selected: Vec<u8> = paths
+            .choose(&mut rng)
+            .map(|(p, _)| p.clone())
+            .unwrap_or_default();
+        Ok(selected)
+    }
+
+    // Traversal engine that samples weighted by visit count (prioritizes less visited)
+    fn weighted_sampler(z: ReadZipperTracked<SpaceRef>) -> Result<AtomPosition, TraversalError> {
+        let paths = collect_all_paths(z);
+        if paths.is_empty() {
+            return Err(TraversalError {});
+        }
+        // Sort by visited_count (ascending) and pick from least visited
+        let min_visited = paths
+            .iter()
+            .map(|(_, h)| h.visited_count)
+            .min()
+            .unwrap_or(0);
+        let least_visited: Vec<Vec<u8>> = paths
+            .into_iter()
+            .filter(|(_, h)| h.visited_count == min_visited)
+            .map(|(p, _)| p)
+            .collect();
+
+        let mut rng = rand::rng();
+        let selected = least_visited.choose(&mut rng).cloned().unwrap_or_default();
+        Ok(selected)
+    }
+
+    // Operations that simulate work on subspaces
+    fn analyze_atom(wz: &mut WriteZipperTracked<SpaceRef>, path: &[u8]) {
+        // Simulate analysis work on the atom
+        let path_len = path.len();
+        std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
+    }
+
+    fn transform_atom(wz: &mut WriteZipperTracked<SpaceRef>, path: &[u8]) {
+        // Simulate transformation work
+        std::thread::sleep(std::time::Duration::from_micros(50));
+    }
+
+    fn validate_atom(wz: &mut WriteZipperTracked<SpaceRef>, path: &[u8]) {
+        // Simulate validation work
+        std::thread::sleep(std::time::Duration::from_micros(30));
+    }
+
+    // Create the sweep
+    let mut sweep = WeightedAtomSweep::<SpaceRef>::new(WeightedAtomSweepSettings::default());
+
+    // Add first engine: random sampling
+    let engine1 = TraversalEngine::new("random_sampler", random_sampler);
+    let process1 = sweep.add_engine(engine1);
+
+    let analyze_op = Operation::new("analyze", analyze_atom);
+    let transform_op = Operation::new("transform", transform_atom);
+
+    process1.subscribe(analyze_op);
+    process1.subscribe(transform_op);
+
+    // Add second engine: weighted sampling
+    let engine2 = TraversalEngine::new("weighted_sampler", weighted_sampler);
+    let process2 = sweep.add_engine(engine2);
+
+    let validate_op = Operation::new("validate", validate_atom);
+    let analyze_op2 = Operation::new("analyze", analyze_atom);
+
+
+    process2.subscribe(validate_op);
+    process2.subscribe(analyze_op2);
+
+    // Spawn and run for a limited time
+    use log::*;
+    let controller = sweep.spawn();
+
+    // Let it run for 5 seconds
+    std::thread::sleep(std::time::Duration::from_secs(5));
+
+    let result = controller.shutdown();
+    assert!(result.is_ok(), "sweep shutdown should succeed");
+
+    println!("bench_was completed successfully");
+}
+
+fn bench_random() {
+    use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, ZipperIteration, ZipperValues};
+    use rand::seq::IndexedRandom;
+    use std::sync::Arc;
+    use weighted_atom_sweep::{
+        AtomHeader, AtomPosition, Operation, OperationObserver, TraversalEngine, TraversalError,
+        WeightedAtomSweep, WeightedAtomSweepSettings,
+    };
+    use mork::weightedsweep::*;
+
+    let mut s = Space::new();
+
+    let space_url = "https://raw.githubusercontent.com/Adam-Vandervorst/metta-examples/refs/heads/main/aunt-kg/simpsons.metta";
+
+    let output = std::process::Command::new("curl")
+        .args(&["-s", "-L", space_url])
+        .output()
+        .expect("Failed to execute curl command");
+
+    if !output.status.success() {
+        panic!(
+            "Failed to fetch space URL: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    s.add_all_sexpr(&output.stdout).unwrap();
+    println!("Space loaded with {} atoms", s.btm.val_count());
+
+    // exec patterns to add weighted sweep operations for counting certain patterns in the space
+    const ADD_EXEC: &str = r#"
+    (exec 0 (, (Individuals $x (Surname "Simpson"))) (O (ws 10 (FoundSimpson $x))) )
+    (exec 0 (, (Individuals $x (Sex "F"))) (O (ws 5 (FoundFemale $x))) )
+    (exec 0 (, (Relations $r (Husband $h))) (O (ws 8 (FoundHusband $h))) )
+    (exec 0 (, (Relations $r (Wife $w))) (O (ws 8 (FoundWife $w))) )
+    (exec 0 (, (Individuals $x (Givenname "Homer"))) (O (ws 20 (FoundHomer $x))) )
+    (exec 0 (, (Individuals $x (Givenname "Marge"))) (O (ws 20 (FoundMarge $x))) )
+    (exec 0 (, (Relations $r (Children $c))) (O (ws 15 (FoundChild $c))) )
+    (exec 0 (, (Head $x)) (O (ws 2 (FoundHead $x))) )
+    "#;
+
+    let wsp = init_weight();
+    GLOBAL_WS_SWEEP.set(std::sync::Arc::new(wsp));
+
+
+    s.add_all_sexpr(ADD_EXEC.as_bytes()).unwrap();
+
+    let mut t0 = std::time::Instant::now();
+    let steps = s.metta_calculus(100);
+    println!("elapsed {} steps {} size {}", t0.elapsed().as_millis(), steps, s.btm.val_count());
+
+    fn analyze_atom(wz: &mut WriteZipperTracked<U64AtomHeader>, path: &[u8]) {
+        let path_len = path.len();
+        std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
+    }
+
+    // Create the sweep
+    let mut sweep = WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
+    
+    let engine1 = TraversalEngine::<U64AtomHeader>::new("random_sampler", next_atom);
+    let process1 = sweep.add_engine(engine1);
+    let analyze_op = Operation::new("analyze", analyze_atom);
+    process1.subscribe(analyze_op);
+
+    let controller = sweep.spawn();
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    let result = controller.shutdown();
+    assert!(result.is_ok(), "sweep shutdown should succeed");
+
+    println!("bench_random completed successfully");
+}
 
 /*fn match_case() {
     let mut s = Space::<U64AtomHeader>::new();
@@ -6505,9 +6514,10 @@ fn main() {
             for b in selected {
                 println!("=== benchmarking {} ===", b);
                 match b {
-                    // "counter_machine" => {
-                    //     bench_cm0(50);
-                    // }
+                    "bench_random" => bench_random(),
+                    "counter_machine" => {
+                        bench_cm0(50);
+                    }
                     "transitive" => {
                         bench_transitive_no_unify(50000, 1000000);
                     }

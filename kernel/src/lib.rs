@@ -8,4 +8,4 @@ pub mod space;
 mod sources;
 mod sinks;
 mod pure;
-mod weightedsweep;
+pub mod weightedsweep;
