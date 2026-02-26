@@ -355,6 +355,7 @@ mod random_walk {
         println!("Error handling test completed!");
     }
 
+    /// -- this does not use the pathmap api yet!
     #[test]
     pub fn test_weighted_map_api() {
 
