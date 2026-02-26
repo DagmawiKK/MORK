@@ -136,7 +136,7 @@ mod random_walk {
             let expected = (weight as f64 / total_weight as f64) * 100.0;
             println!("path: {:?}, count: {}, percentage {}, expected: {}%", path, count, percentage, expected);
     
-            // Allow ±15% tolerance (adjust as needed)
+            // Allow ±15% tolerance
             assert!((percentage - expected).abs() < 15.0, 
                 "Path {:?} has {}%, expected {}%", path, percentage, expected);
         }
@@ -240,24 +240,23 @@ mod random_walk {
                     match head_clone.read_zipper_at_borrowed_path(&path) {
                         Ok(zipper) => {
                             println!("Thread {}: Path access successful", i);
-                            if let Some(header) = zipper.val() {
-                                println!("Thread {}: Found weight value: {:?}", i, header.0);
-                            }
+                            let header = zipper.val().expect("Weight value should exist");
+                            assert_eq!(header.0, 50, "Thread {}: Unexpected weight value", i);
                         }
-                        Err(_) => {
-                            println!("Thread {}: Path not found", i);
+                        Err(e) => {
+                            panic!("Thread {}: Path not found: {:?}", i, e);
                         }
                     }
                 })
             })
             .collect();
 
-        // Wait for all threads to complete
+        // Wait for all threads to complete and check if any panicked
         for handle in handles {
-            let _ = handle.join();
+            assert!(handle.join().is_ok(), "A concurrent access thread panicked");
         }
 
-        println!("Concurrent access test completed!");
+        println!("Concurrent access test completed successfully!");
     }
 
     /// Test weight updates and propagation
@@ -297,10 +296,71 @@ mod random_walk {
         }
 
         println!("weight propagation test completed!");
+    }
 
+    // performance test with larger dataset
+    #[test]
+    pub fn test_performance_large_dataset() {
+        println!("starting performance test...");
 
+        let mut map = PathMap::<U64AtomHeader>::new();
+
+        // Create dataset
+        for i in 0..1000 {
+            let path = vec![i as u8, (i / 10) as u8, (i / 100) as u8];
+            map.set_val_at(&path, U64AtomHeader((i % 50) as i32 + 1));
+        }
+
+        let start_time = std::time::Instant::now();
+
+        // Multiple traversals to test performance
+        let mut successful_traversal = 0;
+        for _ in 0..100 {
+            if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
+                if next_atom(read_zipper).is_ok() {
+                    successful_traversal += 1;
+                }
+            }
+        }
+
+        assert_eq!(successful_traversal, 100, "Should have performed 100 successful traversals");
+        
+        let duration = start_time.elapsed();
+        println!("performance results: {} traversals in {:?}", successful_traversal, duration);
+        println!("performance test complete")
 
     }
+
+    #[test]
+    pub fn test_error_handling() {
+        println!("Testing error handling...");
+
+        // Test with empty map
+        let mut map = PathMap::<U64AtomHeader>::new();
+
+        let head = map.zipper_head();
+        if let Ok(read_zipper) = head.read_zipper_at_borrowed_path(&[]) {
+            let result = next_atom(read_zipper);
+            assert!(result.is_err() ||  result.as_ref().map_or(false, |p| p.is_empty()), "next_atom should return Err for an empty map, but returned {:?}", result);
+        }
+
+        // Test with non-existent paths
+        let non_existent = [9, 9, 9];
+        let zipper_result = head.read_zipper_at_borrowed_path(&non_existent);
+        
+        match zipper_result {
+            Ok(z) => assert!(z.val().is_none(), "Path {:?} should not have a value", non_existent),
+            Err(_) => (),
+        }
+
+        println!("Error handling test completed!");
+    }
+
+    
+
+
+
+
 }
 
 #[cfg(test)]
