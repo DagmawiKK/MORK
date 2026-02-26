@@ -83,63 +83,64 @@ mod random_walk {
                 "Path {:?} has {}%, expected {}%", path, percentage, expected);
             }
     }
-
     
-    /// Test weighted random distribution with each path being unique
-    // #[test]
-    // fn test_weighted_random_distribution_overlapping_path() {
-    //
-    //     // Create map with different weights
-    //     let mut map = PathMap::<U64AtomHeader>::new();
-    //
-    //     let path1 = [1, 1, 1];
-    //     let path2 = [1, 1, 2];
-    //     let path3 = [2, 1, 1];
-    //     let path4 = [2, 1, 2];
-    //     let path5 = [2, 2, 2];
-    //     let path6 = [2, 2, 1];
-    //
-    //     let atoms = vec![
-    //         (&path1, U64AtomHeader(10)),
-    //         (&path2, U64AtomHeader(30)),
-    //         (&path3, U64AtomHeader(15)),
-    //         (&path4, U64AtomHeader(2)),
-    //         (&path5, U64AtomHeader(8)),
-    //         (&path6, U64AtomHeader(20)),
-    //     ];
-    //
-    //     for (path, header) in &atoms {
-    //         map.set_val_at(path, *header);
-    //     }
-    //
-    //     let mut atom_counts = std::collections::HashMap::new();
-    //
-    //     // Run multiple traversals to test distribution
-    //     for _ in 0..100 {
-    //         if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
-    //             if let Ok(atom_path) = next_atom(read_zipper) {
-    //                 println!("found atom_path {:?}", atom_path);
-    //                 *atom_counts.entry(atom_path.clone()).or_insert(0) += 1;
-    //             }
-    //         }
-    //     }
-    //
-    //     for (path, count) in &atom_counts {
-    //         let percentage = (*count as f64 / 100.0) * 100.0;
-    //         println!("for path {:?} found {count} making {percentage}", path);
-    //          // Get expected percentage based on path
-    //         let expected = match path {
-    //             p if p == &[1, 1, 1] => 12.5,
-    //             p if p == &[2, 2, 2] => 25.0,
-    //             p if p == &[3, 3, 3] => 62.5,
-    //             _ => 0.0,
-    //         };
-    // 
-    //         // Allow ±15% tolerance (adjust as needed)
-    //         assert!((percentage - expected).abs() < 15.0, 
-    //             "Path {:?} has {}%, expected {}%", path, percentage, expected);
-    //         }
-    // }
+    /// Test weighted random distribution with overlapping paths
+    #[test]
+    fn test_weighted_random_distribution_overlapping_path() {
+    
+        // Create map with different weights
+        let mut map = PathMap::<U64AtomHeader>::new();
+    
+        let path1 = [1, 1, 2];
+        let path2 = [1, 1, 2];
+        let path3 = [2, 1, 1];
+        let path4 = [2, 1, 2];
+        let path5 = [2, 2, 2];
+        let path6 = [2, 2, 1];
+    
+        let atoms = vec![
+            (&path1, U64AtomHeader(10)),
+            (&path2, U64AtomHeader(30)),
+            (&path3, U64AtomHeader(15)),
+            (&path4, U64AtomHeader(2)),
+            (&path5, U64AtomHeader(8)),
+            (&path6, U64AtomHeader(20)),
+        ];
+
+
+        let total_weight: u64 = atoms.iter().map(|(_, h) | h.0 as u64).sum(); // changd h.0 to h.0 as u64 to avoid casting error(i32)
+    
+        for (path, header) in &atoms {
+            map.set_val_at(path, *header);
+        }
+    
+        let mut atom_counts = std::collections::HashMap::new();
+    
+        // Run multiple traversals to test distribution
+        for _ in 0..100 {
+            if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
+                if let Ok(atom_path) = next_atom(read_zipper) {
+                    println!("found atom_path {:?}", atom_path);
+                    *atom_counts.entry(atom_path.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+    
+        for (path, count) in &atom_counts {
+            let percentage = (*count as f64 / 100.0) * 100.0;
+            println!("for path {:?} found {count} making {percentage}", path);
+
+            // calculate percentage based on weight
+            let weight = atoms.iter().find(|(p, _)| p.as_slice() == path.as_slice()).map(|(_, h)| h.0).unwrap_or(0);
+
+            let expected = (weight as f64 / total_weight as f64) * 100.0;
+            println!("path: {:?}, count: {}, percentage {}, expected: {}%", path, count, percentage, expected);
+    
+            // Allow ±15% tolerance (adjust as needed)
+            assert!((percentage - expected).abs() < 15.0, 
+                "Path {:?} has {}%, expected {}%", path, percentage, expected);
+        }
+    }
 
 
     /// Test basic WeightedAtomSweep integration with proper API usage
@@ -186,7 +187,7 @@ mod random_walk {
     }
 }
 
-// #[cfg(test)]
+#[cfg(test)]
 mod chunked_pq_test {
     use super::*;
     use pathmap::zipper::ZipperForking;
