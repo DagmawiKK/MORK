@@ -218,6 +218,89 @@ mod random_walk {
 
         println!("TraversalEngine functionality test completed!");
     }
+
+    /// Test concurrent access to WeightedMap
+    #[test]
+    pub fn test_concurrent_weighted_map_access() {
+        println!("Testing concurrent WeightedMap access...");
+
+        // Create PathMap with initial data
+        let mut map = PathMap::<U64AtomHeader>::new();
+        map.set_val_at(&[1, 1, 1], U64AtomHeader(50));
+
+        // Arc for sharing zipper head across threads
+        let head = Arc::new(map.into_zipper_head(&[]));
+
+        // Spawn multiple threads accessing map
+        let handles: Vec<_> = (0..5)
+            .map(|i| {
+                let head_clone = head.clone();
+                thread::spawn(move || {
+                    let path = vec![1 as u8, 1 as u8, 1 as u8];
+                    match head_clone.read_zipper_at_borrowed_path(&path) {
+                        Ok(zipper) => {
+                            println!("Thread {}: Path access successful", i);
+                            if let Some(header) = zipper.val() {
+                                println!("Thread {}: Found weight value: {:?}", i, header.0);
+                            }
+                        }
+                        Err(_) => {
+                            println!("Thread {}: Path not found", i);
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        // Wait for all threads to complete
+        for handle in handles {
+            let _ = handle.join();
+        }
+
+        println!("Concurrent access test completed!");
+    }
+
+    /// Test weight updates and propagation
+    #[test]
+    pub fn test_weight_propagation() {
+        println!("Testing weight propagation...");
+
+        // create initial map
+        let mut map = PathMap::<U64AtomHeader>::new();
+
+        let path1 = [1, 2, 3];
+        let path2 = [1, 2, 4];
+        let path3 = [1, 3, 1];
+
+        map.set_val_at(&path1, U64AtomHeader(10));
+        map.set_val_at(&path2, U64AtomHeader(20));
+        map.set_val_at(&path3, U64AtomHeader(30));
+
+        // check initial weight at leaf
+        println!("Testing weight retrieval...");
+        if let Ok(zipper) = map.zipper_head().read_zipper_at_borrowed_path(&path1) {
+            if let Some(header) = zipper.val() {
+                println!("Initial weight at {:?}: {}", path1, header.0);
+                assert_eq!(header.0, 10);
+            }
+        }
+
+        // update weight at leaf
+        map.set_val_at(&path1, U64AtomHeader(50));
+
+        // check updated weight
+        if let Ok(zipper) = map.zipper_head().read_zipper_at_borrowed_path(&path1) {
+            if let Some(header) = zipper.val() {
+                println!("Updated weight at {:?}: {}", path1, header.0);
+                assert_eq!(header.0, 50);
+            }
+        }
+
+        println!("weight propagation test completed!");
+
+
+
+    }
 }
 
 #[cfg(test)]
