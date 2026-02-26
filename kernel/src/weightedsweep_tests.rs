@@ -352,14 +352,49 @@ mod random_walk {
             Ok(z) => assert!(z.val().is_none(), "Path {:?} should not have a value", non_existent),
             Err(_) => (),
         }
-
         println!("Error handling test completed!");
     }
 
-    
+    #[test]
+    pub fn test_weighted_map_api() {
 
+        let mut map = PathMap::<U64AtomHeader>::new();
+        let path = [1u8, 2u8, 3u8];
 
+        map.set_val_at(&path, U64AtomHeader(42));
 
+        if let Ok(zipper) = map.zipper_head().read_zipper_at_borrowed_path(&path) {
+            let val = zipper.val().expect("Value should exist at path");
+            assert_eq!(val.0, 42);
+        }
+
+        map.set_val_at(&path, U64AtomHeader(100));
+        if let Ok(zipper) = map.zipper_head().read_zipper_at_borrowed_path(&path) {
+            let val = zipper.val().expect("Value should exist after update");
+            assert_eq!(val.0, 100);
+        }
+
+        println!("Starting path iteration...");
+        let mut count = 0;
+        let head = map.zipper_head();
+        if let Ok(mut read_zipper) = head.read_zipper_at_borrowed_path(&[]) {
+            // to_next_val iterates through all values in the map
+            while read_zipper.to_next_val() {
+                count += 1;
+                if let Some(val) = read_zipper.val() {
+                    println!(
+                        "  Found value at path {:?}: {:?}",
+                        read_zipper.path(),
+                        val.0
+                    );
+                }
+            }
+        }
+
+        assert_eq!(count, 1, "Should have found exactly 1 value during iteration");
+        println!("Found {} values during iteration", count);
+        println!("Weighted Api test completed!");
+    }
 
 }
 
