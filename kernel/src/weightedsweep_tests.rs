@@ -91,7 +91,7 @@ mod random_walk {
         // Create map with different weights
         let mut map = PathMap::<U64AtomHeader>::new();
     
-        let path1 = [1, 1, 2];
+        let path1 = [1, 1, 1];
         let path2 = [1, 1, 2];
         let path3 = [2, 1, 1];
         let path4 = [2, 1, 2];
@@ -142,7 +142,6 @@ mod random_walk {
         }
     }
 
-
     /// Test basic WeightedAtomSweep integration with proper API usage
     #[test]
     fn test_weighted_atom_sweep_basic_integration() {
@@ -184,6 +183,40 @@ mod random_walk {
 
         assert!(result.is_ok(), "sweep shutdown should succeed");
 
+    }
+
+    /// Test traversal engine functionality
+    #[test]
+    pub fn test_traversal_engine_functionality() {
+        println!("Testing TraversalEngine functionality...");
+
+        // Create test map with standard U64AtomHeader
+        let mut map = PathMap::<U64AtomHeader>::new();
+
+        map.set_val_at(&[1, 2, 3], U64AtomHeader(5));
+        map.set_val_at(&[4, 5, 6], U64AtomHeader(2));
+
+        // Test next_atom method multiple times
+        for _ in 0..10 {
+            if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
+                // next_atom is a standalone function imported from weightedsweep
+                match next_atom(read_zipper) {
+                    Ok(atom_path) => {
+                        println!(
+                            "TraversalEngine found atom: {:?}",
+                            atom_path
+                        );
+                    }
+                    Err(e) => {
+                        println!("TraversalEngine error: {:?}", e);
+                    }  
+                } 
+            } else {
+                println!("Failed to create read zipper");
+            }
+        }
+
+        println!("TraversalEngine functionality test completed!");
     }
 }
 
