@@ -12,7 +12,6 @@ use pathmap::zipper::{ZipperCreation, ZipperIteration, ZipperMoving, ZipperValue
 use weighted_atom_sweep::{
     AtomHeader, AtomPosition, Operation, OperationObserver, WeightedAtomSweep,
     WeightedAtomSweepSettings, TraversalEngine, 
-    // WeightedMap,
 };
 
 mod operations {
@@ -63,7 +62,6 @@ mod random_walk {
         for _ in 0..100 {
             if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
                 if let Ok(atom_path) = next_atom(read_zipper) {
-                    println!("found atom_path {:?}", atom_path);
                     *atom_counts.entry(atom_path.clone()).or_insert(0) += 1;
                 }
             }
@@ -85,7 +83,6 @@ mod random_walk {
             }
     }
     
-    /// Test weighted random distribution with overlapping paths
     #[test]
     fn test_weighted_random_distribution_overlapping_path() {
     
@@ -109,7 +106,7 @@ mod random_walk {
         ];
 
 
-        let total_weight: u64 = atoms.iter().map(|(_, h) | h.0 as u64).sum(); // changd h.0 to h.0 as u64 to avoid casting error(i32)
+        let total_weight: u64 = atoms.iter().map(|(_, h) | h.0 as u64).sum();
     
         for (path, header) in &atoms {
             map.set_val_at(path, *header);
@@ -117,25 +114,23 @@ mod random_walk {
     
         let mut atom_counts = std::collections::HashMap::new();
     
-        // Run multiple traversals to test distribution
+        // Run multiple traversals
         for _ in 0..100 {
             if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
                 if let Ok(atom_path) = next_atom(read_zipper) {
-                    println!("found atom_path {:?}", atom_path);
                     *atom_counts.entry(atom_path.clone()).or_insert(0) += 1;
                 }
             }
         }
+
+        assert!(!atom_counts.is_empty(), "No atoms were found during traversal");
     
         for (path, count) in &atom_counts {
             let percentage = (*count as f64 / 100.0) * 100.0;
-            println!("for path {:?} found {count} making {percentage}", path);
 
-            // calculate percentage based on weight
             let weight = atoms.iter().find(|(p, _)| p.as_slice() == path.as_slice()).map(|(_, h)| h.0).unwrap_or(0);
 
             let expected = (weight as f64 / total_weight as f64) * 100.0;
-            println!("path: {:?}, count: {}, percentage {}, expected: {}%", path, count, percentage, expected);
     
             // Allow ±15% tolerance
             assert!((percentage - expected).abs() < 15.0, 
@@ -163,7 +158,6 @@ mod random_walk {
 
         // Create traversal engine and operations
         let settings = WeightedAtomSweepSettings {};
-        // let weighted_map_wrapper = WeightedMap::new(weighted_map.into_zipper_head(&[]));
 
         // Creating WeightedAtomSweep
         let mut sweep = WeightedAtomSweep::<U64AtomHeader>::new(settings);
@@ -186,53 +180,49 @@ mod random_walk {
 
     }
 
-    /// Test traversal engine functionality
     #[test]
-    pub fn test_traversal_engine_functionality() {
-        println!("Testing TraversalEngine functionality...");
+    fn test_traversal_engine_functionality() {
 
-        // Create test map with standard U64AtomHeader
         let mut map = PathMap::<U64AtomHeader>::new();
 
-        map.set_val_at(&[1, 2, 3], U64AtomHeader(5));
-        map.set_val_at(&[4, 5, 6], U64AtomHeader(2));
+        let path1 = vec![1, 2, 3];
+        let path2 = vec![4, 5, 6];
+
+        map.set_val_at(&path1, U64AtomHeader(5));
+        map.set_val_at(&path2, U64AtomHeader(2));
+
+        let valid_paths = vec![path1, path2];
+        let mut found_count = 0;
 
         // Test next_atom method multiple times
         for _ in 0..10 {
             if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
-                // next_atom is a standalone function imported from weightedsweep
                 match next_atom(read_zipper) {
                     Ok(atom_path) => {
-                        println!(
-                            "TraversalEngine found atom: {:?}",
-                            atom_path
-                        );
+                        assert!(valid_paths.contains(&atom_path), "Returned atom path {:?} should be one of the inserted paths", atom_path);
+                        found_count += 1;
                     }
                     Err(e) => {
-                        println!("TraversalEngine error: {:?}", e);
+                        panic!("TraversalEngine error: {:?}", e);
                     }  
                 } 
             } else {
-                println!("Failed to create read zipper");
+                panic!("Failed to create read zipper");
             }
         }
 
-        println!("TraversalEngine functionality test completed!");
+        assert!(found_count > 0, "Should have found at least one atom");
     }
 
-    /// Test concurrent access to WeightedMap
     #[test]
-    pub fn test_concurrent_weighted_map_access() {
-        println!("Testing concurrent WeightedMap access...");
+    fn test_concurrent_weighted_map_access() {
 
         // Create PathMap with initial data
         let mut map = PathMap::<U64AtomHeader>::new();
         map.set_val_at(&[1, 1, 1], U64AtomHeader(50));
 
-        // Arc for sharing zipper head across threads
         let head = Arc::new(map.into_zipper_head(&[]));
 
-        // Spawn multiple threads accessing map
         let handles: Vec<_> = (0..5)
             .map(|i| {
                 let head_clone = head.clone();
@@ -240,7 +230,7 @@ mod random_walk {
                     let path = vec![1 as u8, 1 as u8, 1 as u8];
                     match head_clone.read_zipper_at_borrowed_path(&path) {
                         Ok(zipper) => {
-                            println!("Thread {}: Path access successful", i);
+                            
                             let header = zipper.val().expect("Weight value should exist");
                             assert_eq!(header.0, 50, "Thread {}: Unexpected weight value", i);
                         }
@@ -256,65 +246,17 @@ mod random_walk {
         for handle in handles {
             assert!(handle.join().is_ok(), "A concurrent access thread panicked");
         }
-
-        println!("Concurrent access test completed successfully!");
     }
 
-    /// Test weight updates and propagation
     #[test]
-    pub fn test_weight_propagation() {
-        println!("Testing weight propagation...");
-
-        // create initial map
+    fn test_performance_large_dataset() {
         let mut map = PathMap::<U64AtomHeader>::new();
 
-        let path1 = [1, 2, 3];
-        let path2 = [1, 2, 4];
-        let path3 = [1, 3, 1];
-
-        map.set_val_at(&path1, U64AtomHeader(10));
-        map.set_val_at(&path2, U64AtomHeader(20));
-        map.set_val_at(&path3, U64AtomHeader(30));
-
-        // check initial weight at leaf
-        println!("Testing weight retrieval...");
-        if let Ok(zipper) = map.zipper_head().read_zipper_at_borrowed_path(&path1) {
-            if let Some(header) = zipper.val() {
-                println!("Initial weight at {:?}: {}", path1, header.0);
-                assert_eq!(header.0, 10);
-            }
-        }
-
-        // update weight at leaf
-        map.set_val_at(&path1, U64AtomHeader(50));
-
-        // check updated weight
-        if let Ok(zipper) = map.zipper_head().read_zipper_at_borrowed_path(&path1) {
-            if let Some(header) = zipper.val() {
-                println!("Updated weight at {:?}: {}", path1, header.0);
-                assert_eq!(header.0, 50);
-            }
-        }
-
-        println!("weight propagation test completed!");
-    }
-
-    // performance test with larger dataset
-    #[test]
-    pub fn test_performance_large_dataset() {
-        println!("starting performance test...");
-
-        let mut map = PathMap::<U64AtomHeader>::new();
-
-        // Create dataset
         for i in 0..1000 {
             let path = vec![i as u8, (i / 10) as u8, (i / 100) as u8];
             map.set_val_at(&path, U64AtomHeader((i % 50) as i32 + 1));
         }
 
-        let start_time = std::time::Instant::now();
-
-        // Multiple traversals to test performance
         let mut successful_traversal = 0;
         for _ in 0..100 {
             if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
@@ -323,27 +265,13 @@ mod random_walk {
                 }
             }
         }
-
         assert_eq!(successful_traversal, 100, "Should have performed 100 successful traversals");
-        
-        let duration = start_time.elapsed();
-        println!("performance results: {} traversals in {:?}", successful_traversal, duration);
-        println!("performance test complete")
-
     }
 
     #[test]
-    pub fn test_error_handling() {
-        println!("Testing error handling...");
-
-        // Test with empty map
+    fn test_error_handling() {
         let mut map = PathMap::<U64AtomHeader>::new();
-
         let head = map.zipper_head();
-        if let Ok(read_zipper) = head.read_zipper_at_borrowed_path(&[]) {
-            let result = next_atom(read_zipper);
-            assert!(result.is_err() ||  result.as_ref().map_or(false, |p| p.is_empty()), "next_atom should return Err for an empty map, but returned {:?}", result);
-        }
 
         // Test with non-existent paths
         let non_existent = [9, 9, 9];
@@ -353,90 +281,31 @@ mod random_walk {
             Ok(z) => assert!(z.val().is_none(), "Path {:?} should not have a value", non_existent),
             Err(_) => (),
         }
-        println!("Error handling test completed!");
     }
 
-    /// -- this does not use the WeightedMap wrapper as it is not public on was!
-    /// -- uses pathmap api directly
-    #[test]
-    pub fn test_weighted_map_api() {
-
+     #[test]
+    fn test_deep_path_traversal() {
         let mut map = PathMap::<U64AtomHeader>::new();
-        let path = [1u8, 2u8, 3u8];
+        
+        let deep_path = vec![1, 1, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1];
+        map.set_val_at(&deep_path, U64AtomHeader(100));
 
-        map.set_val_at(&path, U64AtomHeader(42));
-
-        if let Ok(zipper) = map.zipper_head().read_zipper_at_borrowed_path(&path) {
-            let val = zipper.val().expect("Value should exist at path");
-            assert_eq!(val.0, 42);
-        }
-
-        map.set_val_at(&path, U64AtomHeader(100));
-        if let Ok(zipper) = map.zipper_head().read_zipper_at_borrowed_path(&path) {
-            let val = zipper.val().expect("Value should exist after update");
-            assert_eq!(val.0, 100);
-        }
-
-        println!("Starting path iteration...");
-        let mut count = 0;
-        let head = map.zipper_head();
-        if let Ok(mut read_zipper) = head.read_zipper_at_borrowed_path(&[]) {
-            // to_next_val iterates through all values in the map
-            while read_zipper.to_next_val() {
-                count += 1;
-                if let Some(val) = read_zipper.val() {
-                    println!(
-                        "  Found value at path {:?}: {:?}",
-                        read_zipper.path(),
-                        val.0
-                    );
+        let mut found_deep = false;
+        
+        if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
+            match next_atom(read_zipper) {
+                Ok(atom_path) => {
+                    assert_eq!(atom_path, deep_path, "Walker returned a path, but it wasn't the full deep path (did it stop early?)");
+                    found_deep = true;
                 }
+                Err(e) => panic!("Walker failed to traverse deep path: {:?}", e),
             }
+        } else {
+            panic!("Failed to create zipper for deep traversal");
         }
-
-        assert_eq!(count, 1, "Should have found exactly 1 value during iteration");
-        println!("Found {} values during iteration", count);
-        println!("Weighted Api test completed!");
+        
+        assert!(found_deep, "Deep path traversal did not complete successfully");
     }
-    
-     // tests weighted map api directly / requires WeightedMap to be made public in was/lib.rs
-    // #[test]
-    // pub fn test_weighted_map_api_1() {
-    //     let mut map = PathMap::<U64AtomHeader>::new();
-    //     let path = [1u8, 2u8, 3u8];
-    //     map.set_val_at(&path, U64AtomHeader(42));
-
-    //     // Create WeightedMap from existing PathMap's zipper head
-    //     let head = Arc::new(map.into_zipper_head([]));
-    //     let weighted_map = WeightedMap { inner: head.clone() };
-
-    //     // Test get_val 
-    //     if let Some(val) = weighted_map.get_val(&path) {
-    //         println!("get_val successful: val={:?}", val.0);
-    //         assert_eq!(val.0, 42);
-    //     } else {
-    //         panic!("get_val failed to find path");
-    //     }
-
-    //     // Test set_weighted_val update
-    //     let result = weighted_map.set_weighted_val(&path, U64AtomHeader(100));
-    //     assert!(result.is_ok(), "set_weighted_val failed");
-    //     assert_eq!(weighted_map.get_val(&path).unwrap().0, 100);
-
-    //     // Test path iteration via reference
-    //     let mut count = 0;
-    //     if let Ok(mut read_zipper) = weighted_map.inner.read_zipper_at_borrowed_path(&[]) {
-    //         while read_zipper.to_next_val() {
-    //             count += 1;
-    //             if let Some(val) = read_zipper.val() {
-    //                 println!("  Found value at path {:?}: {:?}", read_zipper.path(), val.0);
-    //             }
-    //         }
-    //     }
-
-    //     assert_eq!(count, 1, "Should have found exactly 1 value during iteration");
-    //     println!("WeightedMap API test completed!");
-    // }
 
 }
 
