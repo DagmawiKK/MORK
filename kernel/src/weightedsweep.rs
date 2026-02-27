@@ -73,7 +73,6 @@ where
     H: AtomHeader + From<i32> + Into<i32> + Copy + PartialOrd + Default,
 {
     let child_agg_w: i32 = node_agg_w(z.fork_read_zipper()).unwrap();
-    println!("starting next_atom with child_agg_w {child_agg_w}");
 
     // Handle case where there are no children weights
     if child_agg_w == 0 {
@@ -102,7 +101,7 @@ where
         // 7) return if value is selected else conitnue to selected path
         let byte = match choice {
             PathChoice::Value(_) => {
-                println!("chosen in next_atom {:?}", String::from_utf8_lossy(&z.origin_path().to_vec()));
+                // println!("chosen in next_atom {:?}", String::from_utf8_lossy(&z.origin_path().to_vec()));
                 return Ok(z.origin_path().to_vec());
             }
             PathChoice::Path(b) => b,
@@ -113,7 +112,7 @@ where
     }
 
     let path = z.origin_path();
-    println!("chosen in next_atom {:?}", String::from_utf8_lossy(&path.to_vec()));
+    // println!("chosen in next_atom {:?}", String::from_utf8_lossy(&path.to_vec()));
     Ok(path.to_vec())
 }
 

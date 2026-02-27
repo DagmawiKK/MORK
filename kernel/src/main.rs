@@ -4371,8 +4371,8 @@ fn bench_random() {
 
     fn analyze_atom(wz: &mut WriteZipperTracked<U64AtomHeader>, path: &[u8]) {
         let path_len = path.len();
-        println!("path_len {path_len},\n ser {}\n, val_count {} ", serialize(path), wz.val_count());
-        // std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
+        println!("path_len {path_len},\n ser {}\n, val_count {} ", serialize(path), wz.val().unwrap().0);
+        std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 100));
     }
 
     // Get ownership from global for spawn()
