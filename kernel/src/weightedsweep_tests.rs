@@ -11,7 +11,7 @@ use pathmap::morphisms::Catamorphism;
 use pathmap::zipper::{ZipperCreation, ZipperIteration, ZipperMoving, ZipperValues, ZipperWriting, WriteZipperTracked};
 use weighted_atom_sweep::{
     AtomHeader, AtomPosition, Operation, OperationObserver, WeightedAtomSweep,
-    WeightedAtomSweepSettings, TraversalEngine
+    WeightedAtomSweepSettings, TraversalEngine, WeightedMap
 };
 
 mod operations {
@@ -355,7 +355,8 @@ mod random_walk {
         println!("Error handling test completed!");
     }
 
-    /// -- this does not use the pathmap api yet!
+    /// -- this does not use the WeightedMap wrapper as it is not public on was!
+    /// -- uses pathmap api directly
     #[test]
     pub fn test_weighted_map_api() {
 
@@ -396,6 +397,45 @@ mod random_walk {
         println!("Found {} values during iteration", count);
         println!("Weighted Api test completed!");
     }
+    
+    //  // tests weighted map api directly / requires WeightedMap to be made public in was
+    // #[test]
+    // pub fn test_weighted_map_api() {
+    //     let mut map = PathMap::<U64AtomHeader>::new();
+    //     let path = [1u8, 2u8, 3u8];
+    //     map.set_val_at(&path, U64AtomHeader(42));
+
+    //     // Create WeightedMap from existing PathMap's zipper head
+    //     let head = Arc::new(map.into_zipper_head([]));
+    //     let weighted_map = WeightedMap { inner: head.clone() };
+
+    //     // Test get_val 
+    //     if let Some(val) = weighted_map.get_val(&path) {
+    //         println!("get_val successful: val={:?}", val.0);
+    //         assert_eq!(val.0, 42);
+    //     } else {
+    //         panic!("get_val failed to find path");
+    //     }
+
+    //     // Test set_weighted_val update
+    //     let result = weighted_map.set_weighted_val(&path, U64AtomHeader(100));
+    //     assert!(result.is_ok(), "set_weighted_val failed");
+    //     assert_eq!(weighted_map.get_val(&path).unwrap().0, 100);
+
+    //     // Test path iteration via reference
+    //     let mut count = 0;
+    //     if let Ok(mut read_zipper) = weighted_map.inner.read_zipper_at_borrowed_path(&[]) {
+    //         while read_zipper.to_next_val() {
+    //             count += 1;
+    //             if let Some(val) = read_zipper.val() {
+    //                 println!("  Found value at path {:?}: {:?}", read_zipper.path(), val.0);
+    //             }
+    //         }
+    //     }
+
+    //     assert_eq!(count, 1, "Should have found exactly 1 value during iteration");
+    //     println!("WeightedMap API test completed!");
+    // }
 
 }
 
