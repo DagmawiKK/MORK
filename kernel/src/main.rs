@@ -13,7 +13,7 @@ use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::ops::Add;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Instant;
 // use std::future::Future;
 // use std::task::Poll;
@@ -4295,6 +4295,32 @@ fn bench_random() {
         WeightedAtomSweep, WeightedAtomSweepSettings,
     };
 
+    #[derive(Debug, Clone, Default, Copy, PartialEq, PartialOrd)]
+    pub struct SpaceRef {
+        pub atom_id: u64,
+        pub weight: i32,
+        pub visited_count: u64,
+    }
+
+    impl From<i32> for SpaceRef {
+        fn from(value: i32) -> Self {
+            Self {
+                atom_id: 0,
+                weight: value,
+                visited_count: 0,
+            }
+        }
+    }
+
+    // i32 ← U64AtomHeader
+    impl From<SpaceRef> for i32 {
+        fn from(header: SpaceRef) -> Self {
+            header.weight as i32
+        }
+    }
+
+    impl AtomHeader for SpaceRef {}
+
     let mut s: Space<U64AtomHeader> = Space::new();
 
     let space_url = "https://raw.githubusercontent.com/Adam-Vandervorst/metta-examples/refs/heads/main/aunt-kg/simpsons.metta";
@@ -4316,23 +4342,26 @@ fn bench_random() {
 
     // exec patterns to add weighted sweep operations for counting certain patterns in the space
     const ADD_EXEC: &str = r#"
-    (exec 0 (, (Individuals $x (Surname "Simpson"))) (O (ws 10 (FoundSimpson $x))) )
-    (exec 0 (, (Individuals $x (Sex "F"))) (O (ws 5 (FoundFemale $x))) )
-    (exec 0 (, (Relations $r (Husband $h))) (O (ws 8 (FoundHusband $h))) )
-    (exec 0 (, (Relations $r (Wife $w))) (O (ws 8 (FoundWife $w))) )
-    (exec 0 (, (Individuals $x (Givenname "Homer"))) (O (ws 20 (FoundHomer $x))) )
-    (exec 0 (, (Individuals $x (Givenname "Marge"))) (O (ws 20 (FoundMarge $x))) )
-    (exec 0 (, (Relations $r (Children $c))) (O (ws 15 (FoundChild $c))) )
-    (exec 0 (, (Head $x)) (O (ws 2 (FoundHead $x))) )
+    (exec 0 (, (Individuals 6 $y)) (O (ws 100 (Indivduals 6 $y))) )
+    (exec 0 (, (Individuals $x $y)) (O (ws 5 (Individuals $x $y))) )
     "#;
+    // (exec 0 (, (Relations $r (Husband $h))) (O (ws 8 (FoundHusband $h))) )
+    //     (exec 0 (, (Relations $r (Wife $w))) (O (ws 8 (FoundWife $w))) )
+    //     (exec 0 (, (Individuals $x (Givenname "Homer"))) (O (ws 20 (FoundHomer $x))) )
+    //     (exec 0 (, (Individuals $x (Givenname "Marge"))) (O (ws 20 (FoundMarge $x))) )
+    //     (exec 0 (, (Relations $r (Children $c))) (O (ws 15 (FoundChild $c))) )
+    //     (exec 0 (, (Head $x)) (O (ws 2 (FoundHead $x))) )
 
-    let wsp = init_weight();
-    GLOBAL_WS_SWEEP.set(std::sync::Arc::new(wsp));
+    // let wsp = init_weight();
+    // Create the sweep - store in global for WsSink to use
+    let sweep_for_global =
+        WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
+    *GLOBAL_WS_SWEEP.lock().unwrap() = Some(sweep_for_global);
 
     s.add_all_sexpr(ADD_EXEC.as_bytes()).unwrap();
 
     let mut t0 = std::time::Instant::now();
-    let steps = s.metta_calculus(100);
+    let steps = s.metta_calculus(100000);
     println!(
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
@@ -4342,11 +4371,15 @@ fn bench_random() {
 
     fn analyze_atom(wz: &mut WriteZipperTracked<U64AtomHeader>, path: &[u8]) {
         let path_len = path.len();
-        std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
+        println!("path_len {path_len},\n ser {}\n, val_count {} ", serialize(path), wz.val_count());
+        // std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
     }
 
-    // Create the sweep
-    let mut sweep = WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
+    // Get ownership from global for spawn()
+    let mut guard = GLOBAL_WS_SWEEP.lock().unwrap();
+    let sweep = guard.take().expect("no sweep in global");
+    drop(guard);
+    let mut sweep = sweep;
 
     let engine1 = TraversalEngine::<U64AtomHeader>::new("random_sampler", next_atom);
     let process1 = sweep.add_engine(engine1);
@@ -4357,6 +4390,10 @@ fn bench_random() {
     std::thread::sleep(std::time::Duration::from_secs(5));
     let result = controller.shutdown();
     assert!(result.is_ok(), "sweep shutdown should succeed");
+
+    // Reinitialize global for future use
+    // let new_sweep = WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
+    // *GLOBAL_WS_SWEEP.lock().unwrap() = Some(new_sweep);
 
     println!("bench_random completed successfully");
 }
@@ -5104,7 +5141,7 @@ fn lens_composition() {
 }
 
 fn bench_transitive_no_unify(nnodes: usize, nedges: usize) {
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{rngs::StdRng, Rng, SeedableRng};
     let mut rng = StdRng::from_seed([0; 32]);
     let mut s = Space::<U64AtomHeader>::new();
 
@@ -5201,7 +5238,7 @@ fn bench_clique_no_unify(nnodes: usize, nedges: usize, max_clique: usize) {
         )
     }
 
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{rngs::StdRng, Rng, SeedableRng};
     let mut rng = StdRng::from_seed([0; 32]);
     let mut s = Space::<U64AtomHeader>::new();
 
@@ -5254,7 +5291,7 @@ fn bench_clique_no_unify(nnodes: usize, nedges: usize, max_clique: usize) {
 }
 
 fn bench_finite_domain(terms: usize) {
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{rngs::StdRng, Rng, SeedableRng};
     let mut rng = StdRng::from_seed([0; 32]);
     const DS: usize = 64;
     const SYM: [&'static str; 64] = [

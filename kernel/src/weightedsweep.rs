@@ -1,25 +1,23 @@
 use core::borrow;
-use pathmap::PathMap;
 use pathmap::morphisms::Catamorphism;
 use pathmap::zipper::{
     ReadZipperTracked, ReadZipperUntracked, Zipper, ZipperAbsolutePath, ZipperForking,
     ZipperIteration, ZipperMoving, ZipperValues,
 };
+use pathmap::PathMap;
 use rand::Rng;
 use std::cell::{Ref, RefCell};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
-use std::{
-    convert::Infallible,
-    error::Error,
-    sync::{Arc, Mutex, OnceLock},
-};
+use std::convert::Infallible;
+use std::sync::{Arc, Mutex, OnceLock};
+
 use weighted_atom_sweep::{
     AtomHeader, AtomPosition, TraversalEngine, TraversalError, WeightedAtomSweep,
     WeightedAtomSweepSettings,
 };
 
-pub static GLOBAL_WS_SWEEP: OnceLock<Arc<WeightedAtomSweep<U64AtomHeader>>> = OnceLock::new();
+pub static GLOBAL_WS_SWEEP: Mutex<Option<WeightedAtomSweep<U64AtomHeader>>> = Mutex::new(None);
 
 pub fn init_weight() -> WeightedAtomSweep<U64AtomHeader> {
     let settings = WeightedAtomSweepSettings {};
@@ -74,10 +72,8 @@ pub fn next_atom<H>(mut z: ReadZipperTracked<H>) -> Result<AtomPosition, Travers
 where
     H: AtomHeader + From<i32> + Into<i32> + Copy + PartialOrd + Default,
 {
-    let binding = H::default();
-    let root_agg_w = z.val().unwrap_or(&binding);
-    let child_agg_w: i32 = root_agg_w.clone().into();
-    // println!("in next atom {child_agg_w}");
+    let child_agg_w: i32 = node_agg_w(z.fork_read_zipper()).unwrap();
+    println!("starting next_atom with child_agg_w {child_agg_w}");
 
     // Handle case where there are no children weights
     if child_agg_w == 0 {
@@ -106,7 +102,7 @@ where
         // 7) return if value is selected else conitnue to selected path
         let byte = match choice {
             PathChoice::Value(_) => {
-                // println!("chosen in next_atom {:?}", String::from_utf8(z.origin_path().to_vec()).unwrap());
+                println!("chosen in next_atom {:?}", String::from_utf8_lossy(&z.origin_path().to_vec()));
                 return Ok(z.origin_path().to_vec());
             }
             PathChoice::Path(b) => b,
@@ -117,7 +113,7 @@ where
     }
 
     let path = z.origin_path();
-    // println!("chosen in next_atom {:?}", String::from_utf8(path.to_vec()).unwrap());
+    println!("chosen in next_atom {:?}", String::from_utf8_lossy(&path.to_vec()));
     Ok(path.to_vec())
 }
 
@@ -238,11 +234,7 @@ impl ChunkedPQTraverse {
         path: ReadZipperUntracked<U64AtomHeader>,
     ) -> Result<i32, Infallible> {
         let total: Result<i32, Infallible> = path.into_cata_jumping_side_effect_fallible(
-            |_mask,
-             children: &mut [i32],
-             _size,
-             maybe_v: Option<&U64AtomHeader>,
-             _path| {
+            |_mask, children: &mut [i32], _size, maybe_v: Option<&U64AtomHeader>, _path| {
                 let from_children = children.iter().copied().sum::<i32>();
                 let here = maybe_v.map(|h| h).unwrap_or(&U64AtomHeader::default()).0;
                 Ok(here + from_children)
@@ -341,5 +333,3 @@ impl ChunkedPQTraverse {
         }
     }
 }
-
-

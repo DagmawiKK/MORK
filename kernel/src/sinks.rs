@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::ptr::slice_from_raw_parts;
+use std::sync::{RwLock, Mutex};
 
 use futures::StreamExt;
 use pathmap::ring::{AlgebraicStatus, Lattice};
@@ -1708,11 +1709,12 @@ where
                 .unwrap()
         }[4..];
         trace!(target: "sink", "ws requesting {}", serialize(p));
-        if let Some(_) = GLOBAL_WS_SWEEP.get() {
+        let mut guard = GLOBAL_WS_SWEEP.lock().unwrap();
+        if guard.is_some() {
             trace!(target: "sink", "WSP available");
         } else {
             let wsp = init_weight();
-            GLOBAL_WS_SWEEP.set(std::sync::Arc::new(wsp));
+            *guard = Some(wsp);
             trace!(target: "sink", "create wsp");
         }
         std::iter::once(WriteResourceRequest::BTM(p))
@@ -1728,16 +1730,19 @@ where
     {
         let current_thread = std::thread::current().id();
         trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(path), serialize(path));
-        if let Some(wsweep) = GLOBAL_WS_SWEEP.get() {
+        let mut guard = GLOBAL_WS_SWEEP.lock().unwrap();
+        if let Some(wsweep) = guard.as_mut() {
             let WriteResource::BTM(wz) = it.next().unwrap() else {
                 unreachable!()
             };
             let mpath = &path[self.skip..];
+            
+            // Access map directly from the sweep
             let wmap = &wsweep.map;
+            
             trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
             trace!(target: "sink", "ws sinking '{}'", serialize(mpath));
             let curr = wmap.get_val(mpath).unwrap_or(U64AtomHeader::default()).0;
-            println!("Setting weight: old: {:?}, delta: {}", curr, self.delta);
             let _ = &wmap.set_weighted_val(mpath, U64AtomHeader((curr as u64 + self.delta) as i32));
 
             trace!(target: "sink", "ws finalizing {:?}", wmap.get_val(mpath).unwrap_or(U64AtomHeader::default()).0);
