@@ -11,7 +11,8 @@ use pathmap::morphisms::Catamorphism;
 use pathmap::zipper::{ZipperCreation, ZipperIteration, ZipperMoving, ZipperValues, ZipperWriting, WriteZipperTracked};
 use weighted_atom_sweep::{
     AtomHeader, AtomPosition, Operation, OperationObserver, WeightedAtomSweep,
-    WeightedAtomSweepSettings, TraversalEngine, WeightedMap
+    WeightedAtomSweepSettings, TraversalEngine, 
+    // WeightedMap,
 };
 
 mod operations {
@@ -398,9 +399,9 @@ mod random_walk {
         println!("Weighted Api test completed!");
     }
     
-    //  // tests weighted map api directly / requires WeightedMap to be made public in was
+     // tests weighted map api directly / requires WeightedMap to be made public in was/lib.rs
     // #[test]
-    // pub fn test_weighted_map_api() {
+    // pub fn test_weighted_map_api_1() {
     //     let mut map = PathMap::<U64AtomHeader>::new();
     //     let path = [1u8, 2u8, 3u8];
     //     map.set_val_at(&path, U64AtomHeader(42));
