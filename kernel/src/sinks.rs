@@ -1,24 +1,27 @@
 use std::cmp::Ordering;
 use std::ptr::slice_from_raw_parts;
 
-use futures::StreamExt;
-use pathmap::ring::{AlgebraicStatus, Lattice};
-use mork_expr::{byte_item, Expr, ExprZipper, ExtractFailure, item_byte, parse, serialize, Tag, traverseh, ExprEnv, unify, UnificationFailure, apply, destruct};
-use mork_frontend::bytestring_parser::{Parser, ParserError, Context};
-use mork_interning::{WritePermit, SharedMapping, SharedMappingHandle};
-use pathmap::utils::{BitMask, ByteMask};
-use pathmap::zipper::*;
-use mork_frontend::json_parser::Transcriber;
-use log::*;
-use pathmap::morphisms::Catamorphism;
-use pathmap::PathMap;
+use crate::pure;
+use crate::space::ACT_PATH;
+use crate::weightedsweep::{GLOBAL_WS_SWEEP, Traverse, U64AtomHeader, init_weight};
 use eval::EvalScope;
 use eval_ffi::ExprSource;
+use futures::StreamExt;
+use log::*;
 use mork_expr::macros::SerializableExpr;
-use crate::pure;
-use weighted_atom_sweep::{WeightedAtomSweep, AtomHeader};
-use crate::space::ACT_PATH;
-use crate::weightedsweep::{ GLOBAL_WS_SWEEP, Traverse, U64AtomHeader, init_weight };
+use mork_expr::{
+    Expr, ExprEnv, ExprZipper, ExtractFailure, Tag, UnificationFailure, apply, byte_item, destruct,
+    item_byte, parse, serialize, traverseh, unify,
+};
+use mork_frontend::bytestring_parser::{Context, Parser, ParserError};
+use mork_frontend::json_parser::Transcriber;
+use mork_interning::{SharedMapping, SharedMappingHandle, WritePermit};
+use pathmap::PathMap;
+use pathmap::morphisms::Catamorphism;
+use pathmap::ring::{AlgebraicStatus, Lattice};
+use pathmap::utils::{BitMask, ByteMask};
+use pathmap::zipper::*;
+use weighted_atom_sweep::{AtomHeader, WeightedAtomSweep};
 
 #[derive(Eq, PartialEq, Debug)]
 pub(crate) enum WriteResourceRequest {
@@ -1708,11 +1711,14 @@ where
                 .unwrap()
         }[4..];
         trace!(target: "sink", "ws requesting {}", serialize(p));
-        if let Some(_) = GLOBAL_WS_SWEEP.get() {
+        // if let Some(_) = GLOBAL_WS_SWEEP.get() {
+        let mut guard = GLOBAL_WS_SWEEP.lock().unwrap();
+        if guard.is_some() {
             trace!(target: "sink", "WSP available");
         } else {
             let wsp = init_weight();
-            GLOBAL_WS_SWEEP.set(std::sync::Arc::new(wsp));
+            // GLOBAL_WS_SWEEP.set(std::sync::Arc::new(wsp));
+            *guard = Some(wsp);
             trace!(target: "sink", "create wsp");
         }
         std::iter::once(WriteResourceRequest::BTM(p))
@@ -1728,7 +1734,9 @@ where
     {
         let current_thread = std::thread::current().id();
         trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(path), serialize(path));
-        if let Some(wsweep) = GLOBAL_WS_SWEEP.get() {
+        // if let Some(wsweep) = GLOBAL_WS_SWEEP.get() {
+        let mut guard = GLOBAL_WS_SWEEP.lock().unwrap();
+        if let Some(wsweep) = guard.as_mut() {
             let WriteResource::BTM(wz) = it.next().unwrap() else {
                 unreachable!()
             };
