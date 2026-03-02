@@ -11,7 +11,7 @@ use pathmap::morphisms::Catamorphism;
 use pathmap::zipper::{ZipperCreation, ZipperIteration, ZipperMoving, ZipperValues, ZipperWriting, WriteZipperTracked};
 use weighted_atom_sweep::{
     AtomHeader, AtomPosition, Operation, OperationObserver, WeightedAtomSweep,
-    WeightedAtomSweepSettings, TraversalEngine
+    WeightedAtomSweepSettings, TraversalEngine, 
 };
 
 mod operations {
@@ -62,7 +62,6 @@ mod random_walk {
         for _ in 0..100 {
             if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
                 if let Ok(atom_path) = next_atom(read_zipper) {
-                    println!("found atom_path {:?}", atom_path);
                     *atom_counts.entry(atom_path.clone()).or_insert(0) += 1;
                 }
             }
@@ -83,64 +82,61 @@ mod random_walk {
                 "Path {:?} has {}%, expected {}%", path, percentage, expected);
             }
     }
-
     
-    /// Test weighted random distribution with each path being unique
-    // #[test]
-    // fn test_weighted_random_distribution_overlapping_path() {
-    //
-    //     // Create map with different weights
-    //     let mut map = PathMap::<U64AtomHeader>::new();
-    //
-    //     let path1 = [1, 1, 1];
-    //     let path2 = [1, 1, 2];
-    //     let path3 = [2, 1, 1];
-    //     let path4 = [2, 1, 2];
-    //     let path5 = [2, 2, 2];
-    //     let path6 = [2, 2, 1];
-    //
-    //     let atoms = vec![
-    //         (&path1, U64AtomHeader(10)),
-    //         (&path2, U64AtomHeader(30)),
-    //         (&path3, U64AtomHeader(15)),
-    //         (&path4, U64AtomHeader(2)),
-    //         (&path5, U64AtomHeader(8)),
-    //         (&path6, U64AtomHeader(20)),
-    //     ];
-    //
-    //     for (path, header) in &atoms {
-    //         map.set_val_at(path, *header);
-    //     }
-    //
-    //     let mut atom_counts = std::collections::HashMap::new();
-    //
-    //     // Run multiple traversals to test distribution
-    //     for _ in 0..100 {
-    //         if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
-    //             if let Ok(atom_path) = next_atom(read_zipper) {
-    //                 println!("found atom_path {:?}", atom_path);
-    //                 *atom_counts.entry(atom_path.clone()).or_insert(0) += 1;
-    //             }
-    //         }
-    //     }
-    //
-    //     for (path, count) in &atom_counts {
-    //         let percentage = (*count as f64 / 100.0) * 100.0;
-    //         println!("for path {:?} found {count} making {percentage}", path);
-    //          // Get expected percentage based on path
-    //         let expected = match path {
-    //             p if p == &[1, 1, 1] => 12.5,
-    //             p if p == &[2, 2, 2] => 25.0,
-    //             p if p == &[3, 3, 3] => 62.5,
-    //             _ => 0.0,
-    //         };
-    // 
-    //         // Allow ±15% tolerance (adjust as needed)
-    //         assert!((percentage - expected).abs() < 15.0, 
-    //             "Path {:?} has {}%, expected {}%", path, percentage, expected);
-    //         }
-    // }
+    #[test]
+    fn test_weighted_random_distribution_overlapping_path() {
+    
+        // Create map with different weights
+        let mut map = PathMap::<U64AtomHeader>::new();
+    
+        let path1 = [1, 1, 1];
+        let path2 = [1, 1, 2];
+        let path3 = [2, 1, 1];
+        let path4 = [2, 1, 2];
+        let path5 = [2, 2, 2];
+        let path6 = [2, 2, 1];
+    
+        let atoms = vec![
+            (&path1, U64AtomHeader(10)),
+            (&path2, U64AtomHeader(30)),
+            (&path3, U64AtomHeader(15)),
+            (&path4, U64AtomHeader(2)),
+            (&path5, U64AtomHeader(8)),
+            (&path6, U64AtomHeader(20)),
+        ];
 
+
+        let total_weight: u64 = atoms.iter().map(|(_, h) | h.0 as u64).sum();
+    
+        for (path, header) in &atoms {
+            map.set_val_at(path, *header);
+        }
+    
+        let mut atom_counts = std::collections::HashMap::new();
+    
+        // Run multiple traversals
+        for _ in 0..100 {
+            if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
+                if let Ok(atom_path) = next_atom(read_zipper) {
+                    *atom_counts.entry(atom_path.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        assert!(!atom_counts.is_empty(), "No atoms were found during traversal");
+    
+        for (path, count) in &atom_counts {
+            let percentage = (*count as f64 / 100.0) * 100.0;
+
+            let weight = atoms.iter().find(|(p, _)| p.as_slice() == path.as_slice()).map(|(_, h)| h.0).unwrap_or(0);
+
+            let expected = (weight as f64 / total_weight as f64) * 100.0;
+    
+            // Allow ±15% tolerance
+            assert!((percentage - expected).abs() < 15.0, 
+                "Path {:?} has {}%, expected {}%", path, percentage, expected);
+        }
+    }
 
     /// Test basic WeightedAtomSweep integration with proper API usage
     #[test]
@@ -162,7 +158,6 @@ mod random_walk {
 
         // Create traversal engine and operations
         let settings = WeightedAtomSweepSettings {};
-        // let weighted_map_wrapper = WeightedMap::new(weighted_map.into_zipper_head(&[]));
 
         // Creating WeightedAtomSweep
         let mut sweep = WeightedAtomSweep::<U64AtomHeader>::new(settings);
@@ -184,9 +179,179 @@ mod random_walk {
         assert!(result.is_ok(), "sweep shutdown should succeed");
 
     }
+
+    #[test]
+    fn test_traversal_engine_functionality() {
+
+        let mut map = PathMap::<U64AtomHeader>::new();
+
+        let path1 = vec![1, 2, 3];
+        let path2 = vec![4, 5, 6];
+
+        map.set_val_at(&path1, U64AtomHeader(5));
+        map.set_val_at(&path2, U64AtomHeader(2));
+
+        let valid_paths = vec![path1, path2];
+        let mut found_count = 0;
+
+        // Test next_atom method multiple times
+        for _ in 0..10 {
+            if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
+                match next_atom(read_zipper) {
+                    Ok(atom_path) => {
+                        assert!(valid_paths.contains(&atom_path), "Returned atom path {:?} should be one of the inserted paths", atom_path);
+                        found_count += 1;
+                    }
+                    Err(e) => {
+                        panic!("TraversalEngine error: {:?}", e);
+                    }  
+                } 
+            } else {
+                panic!("Failed to create read zipper");
+            }
+        }
+
+        assert!(found_count > 0, "Should have found at least one atom");
+    }
+
+    #[test]
+    fn test_concurrent_weighted_map_access() {
+
+        // Create PathMap with initial data
+        let mut map = PathMap::<U64AtomHeader>::new();
+        map.set_val_at(&[1, 1, 1], U64AtomHeader(50));
+
+        let head = Arc::new(map.into_zipper_head(&[]));
+
+        let handles: Vec<_> = (0..5)
+            .map(|i| {
+                let head_clone = head.clone();
+                thread::spawn(move || {
+                    let path = vec![1 as u8, 1 as u8, 1 as u8];
+                    match head_clone.read_zipper_at_borrowed_path(&path) {
+                        Ok(zipper) => {
+                            
+                            let header = zipper.val().expect("Weight value should exist");
+                            assert_eq!(header.0, 50, "Thread {}: Unexpected weight value", i);
+                        }
+                        Err(e) => {
+                            panic!("Thread {}: Path not found: {:?}", i, e);
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        // Wait for all threads to complete and check if any panicked
+        for handle in handles {
+            assert!(handle.join().is_ok(), "A concurrent access thread panicked");
+        }
+    }
+
+    #[test]
+    fn test_performance_large_dataset() {
+        let mut map = PathMap::<U64AtomHeader>::new();
+
+        for i in 0..1000 {
+            let path = vec![i as u8, (i / 10) as u8, (i / 100) as u8];
+            map.set_val_at(&path, U64AtomHeader((i % 50) as i32 + 1));
+        }
+
+        let mut successful_traversal = 0;
+        for _ in 0..100 {
+            if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
+                if next_atom(read_zipper).is_ok() {
+                    successful_traversal += 1;
+                }
+            }
+        }
+        assert_eq!(successful_traversal, 100, "Should have performed 100 successful traversals");
+    }
+
+    #[test]
+    fn test_error_handling() {
+        let mut map = PathMap::<U64AtomHeader>::new();
+        let head = map.zipper_head();
+
+        // Test with non-existent paths
+        let non_existent = [9, 9, 9];
+        let zipper_result = head.read_zipper_at_borrowed_path(&non_existent);
+        
+        match zipper_result {
+            Ok(z) => assert!(z.val().is_none(), "Path {:?} should not have a value", non_existent),
+            Err(_) => (),
+        }
+    }
+
+     #[test]
+    fn test_deep_path_traversal() {
+        let mut map = PathMap::<U64AtomHeader>::new();
+        
+        let deep_path = vec![1, 1, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1];
+        map.set_val_at(&deep_path, U64AtomHeader(100));
+
+        let mut found_deep = false;
+        
+        if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
+            match next_atom(read_zipper) {
+                Ok(atom_path) => {
+                    assert_eq!(atom_path, deep_path, "Walker returned a path, but it wasn't the full deep path (did it stop early?)");
+                    found_deep = true;
+                }
+                Err(e) => panic!("Walker failed to traverse deep path: {:?}", e),
+            }
+        } else {
+            panic!("Failed to create zipper for deep traversal");
+        }
+        
+        assert!(found_deep, "Deep path traversal did not complete successfully");
+    }
+
+    #[test]
+    fn test_multiple_path_zero() {
+        let mut map = PathMap::<U64AtomHeader>::new();
+        
+        map.set_val_at(&[1, 1], U64AtomHeader(0));
+        map.set_val_at(&[2, 2], U64AtomHeader(0));
+        map.set_val_at(&[3, 3], U64AtomHeader(0));
+
+        // next_atom should still return a valid path 
+        if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
+            let result = next_atom(read_zipper);
+            assert!(result.is_ok(), "Should handle zero weights without error");
+        }
+    }
+
+    #[test]
+    fn test_multple_path_positive() {
+        let mut map = PathMap::<U64AtomHeader>::new();
+        let paths = vec![
+            vec![1, 1],
+            vec![2, 2],
+            vec![3, 3],
+        ];
+        
+        for path in &paths {
+            map.set_val_at(path, U64AtomHeader(10));
+        }
+
+        let mut seen_paths = HashSet::new();
+        
+        // Run enough times to likely see all paths
+        for _ in 0..100 {
+            if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
+                if let Ok(path) = next_atom(read_zipper) {
+                    seen_paths.insert(path);
+                }
+            }
+        }
+
+        assert_eq!(seen_paths.len(), paths.len(), "Should eventually sample all positive weight paths");
+    }
+
 }
 
-// #[cfg(test)]
+#[cfg(test)]
 mod chunked_pq_test {
     use super::*;
     use pathmap::zipper::ZipperForking;
