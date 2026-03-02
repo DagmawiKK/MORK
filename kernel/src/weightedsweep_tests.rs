@@ -307,6 +307,48 @@ mod random_walk {
         assert!(found_deep, "Deep path traversal did not complete successfully");
     }
 
+    #[test]
+    fn test_multiple_path_zero() {
+        let mut map = PathMap::<U64AtomHeader>::new();
+        
+        map.set_val_at(&[1, 1], U64AtomHeader(0));
+        map.set_val_at(&[2, 2], U64AtomHeader(0));
+        map.set_val_at(&[3, 3], U64AtomHeader(0));
+
+        // next_atom should still return a valid path 
+        if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
+            let result = next_atom(read_zipper);
+            assert!(result.is_ok(), "Should handle zero weights without error");
+        }
+    }
+
+    #[test]
+    fn test_multple_path_positive() {
+        let mut map = PathMap::<U64AtomHeader>::new();
+        let paths = vec![
+            vec![1, 1],
+            vec![2, 2],
+            vec![3, 3],
+        ];
+        
+        for path in &paths {
+            map.set_val_at(path, U64AtomHeader(10));
+        }
+
+        let mut seen_paths = HashSet::new();
+        
+        // Run enough times to likely see all paths
+        for _ in 0..100 {
+            if let Ok(read_zipper) = map.zipper_head().read_zipper_at_borrowed_path(&[]) {
+                if let Ok(path) = next_atom(read_zipper) {
+                    seen_paths.insert(path);
+                }
+            }
+        }
+
+        assert_eq!(seen_paths.len(), paths.len(), "Should eventually sample all positive weight paths");
+    }
+
 }
 
 #[cfg(test)]
