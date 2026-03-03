@@ -74,10 +74,7 @@ pub fn next_atom<H>(mut z: ReadZipperTracked<H>) -> Result<AtomPosition, Travers
 where
     H: AtomHeader + From<i32> + Into<i32> + Copy + PartialOrd + Default,
 {
-    let binding = H::default();
-    let root_agg_w = z.val().unwrap_or(&binding);
-    let child_agg_w: i32 = root_agg_w.clone().into();
-    // println!("in next atom {child_agg_w}");
+    let child_agg_w: i32 = node_agg_w(z.clone()).unwrap();
 
     // Handle case where there are no children weights
     if child_agg_w == 0 {
@@ -138,9 +135,10 @@ where
     Ok(total)
 }
 
-fn node_agg_w<H>(path: ReadZipperUntracked<H>) -> Result<i32, TraversalError>
+fn node_agg_w<Z, H>(path: Z) -> Result<i32, TraversalError>
 where
     H: AtomHeader + From<i32> + Into<i32> + Copy + PartialOrd + Default,
+    Z: Catamorphism<H>
 {
     let total: Result<i32, Infallible> = path.into_cata_jumping_side_effect_fallible(
         |_mask, children: &mut [i32], _size, maybe_v: Option<&H>, _path| {
