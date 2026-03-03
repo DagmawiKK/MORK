@@ -231,7 +231,7 @@ impl ChunkedPQTraverse {
         drop(h);
 
         let read_root = z.fork_read_zipper();
-        self.collect_atoms_of_length_d(read_root, 0, self.depth, &self.heap);
+        self.collect_atoms_of_length_d(read_root, self.depth, &self.heap);
     }
 
     fn node_agg_w_local(
@@ -250,28 +250,30 @@ impl ChunkedPQTraverse {
     }
     // TODO: verify descend_first_k_path traverses alternative pathes
     //
-    // fn collect_atoms_of_length_d(
-    //     &self,
-    //     mut z: ReadZipperUntracked<U64AtomHeader>,
-    //     target_depth: usize,
-    //     heap: &Arc<Mutex<BinaryHeap<AtomChunk>>>,
-    // ) {
-    //     if z.descend_first_k_path(target_depth) {
-    //         loop {
-    //             if let Some(_) = z.val() {
-    //                 let score = self.node_agg_w_local(z.fork_read_zipper()).unwrap_or(0);
-    //                 heap.lock().unwrap().push(AtomChunk {
-    //                     path: z.origin_path().to_vec(),
-    //                     score,
-    //                 });
-    //             }
-    //
-    //             if !z.to_next_k_path(target_depth) {
-    //                 break;
-    //             }
-    //         }
-    //     }
-    // }
+    fn collect_atoms_of_length_d(
+        &self,
+        mut z: ReadZipperUntracked<U64AtomHeader>,
+        target_depth: usize,
+        heap: &Arc<Mutex<BinaryHeap<AtomChunk>>>,
+    ) {
+        if z.descend_first_k_path(target_depth) {
+            loop {
+                //if let Some(_) = z.val() {
+                let score = self.node_agg_w_local(z.fork_read_zipper()).unwrap_or(0);
+                heap.lock().unwrap().push(AtomChunk {
+                    path: z.origin_path().to_vec(),
+                    score,
+                });
+                println!("heap size: {:?}", heap.lock().unwrap().len());
+                println!("heap {:?}", heap.lock().unwrap());
+                //}
+
+                if !z.to_next_k_path(target_depth) {
+                    break;
+                }
+            }
+        }
+    }
     //
     // fn collect_atoms_of_length_d(
     //     &self,
@@ -311,64 +313,64 @@ impl ChunkedPQTraverse {
     //     }
     // }
 
-    fn collect_atoms_of_length_d(
-        &self,
-        mut z: ReadZipperUntracked<U64AtomHeader>,
-        cur: usize,
-        target_depth: usize,
-        heap: &Arc<Mutex<BinaryHeap<AtomChunk>>>,
-    ) {
-        println!(
-            "[collect] ENTER: cur={}, target={}, path={:?}",
-            cur,
-            target_depth,
-            z.origin_path()
-        );
-        // Collect if we have a value at this node (any depth)
-        // if z.val().is_some() {
-        let score = self.node_agg_w_local(z.fork_read_zipper()).unwrap_or(0);
-        println!(
-            "[collect]   FOUND VALUE at depth {}: {:?}, score={}",
-            cur,
-            z.origin_path(),
-            score
-        );
-        heap.lock().unwrap().push(AtomChunk {
-            path: z.origin_path().to_vec(),
-            score,
-        });
-        // println!("[collect]   Heap size now: {}", heap.lock().unwrap().len());
-        // } else {
-        //     println!("[collect]   No value at this node");
-        // }
-        // Stop if we've exceeded target depth
-        if cur >= target_depth {
-            println!(
-                "[collect]   cur >= target, returning. Heap size: {}",
-                heap.lock().unwrap().len()
-            );
-            return;
-        }
-        // Continue traversing
-        if z.child_count() > 0 {
-            // println!("[collect]   Descending to {} children", z.child_count());
-            for b in z.child_mask().iter() {
-                // println!("[collect]   -> descending to byte {}", b);
-                z.descend_to_byte(b);
-                let child = z.fork_read_zipper();
-                self.collect_atoms_of_length_d(child, cur + 1, target_depth, heap);
-                z.ascend_byte();
-            }
-        } else {
-            // println!("[collect]   No children, returning");
-        }
-
-        println!(
-            "[collect] EXIT: path={:?}, heap_size={}",
-            z.origin_path(),
-            heap.lock().unwrap().len()
-        );
-    }
+    // fn collect_atoms_of_length_d(
+    //     &self,
+    //     mut z: ReadZipperUntracked<U64AtomHeader>,
+    //     cur: usize,
+    //     target_depth: usize,
+    //     heap: &Arc<Mutex<BinaryHeap<AtomChunk>>>,
+    // ) {
+    //     println!(
+    //         "[collect] ENTER: cur={}, target={}, path={:?}",
+    //         cur,
+    //         target_depth,
+    //         z.origin_path()
+    //     );
+    //     // Collect if we have a value at this node (any depth)
+    //     // if z.val().is_some() {
+    //     let score = self.node_agg_w_local(z.fork_read_zipper()).unwrap_or(0);
+    //     println!(
+    //         "[collect]   FOUND VALUE at depth {}: {:?}, score={}",
+    //         cur,
+    //         z.origin_path(),
+    //         score
+    //     );
+    //     heap.lock().unwrap().push(AtomChunk {
+    //         path: z.origin_path().to_vec(),
+    //         score,
+    //     });
+    //     // println!("[collect]   Heap size now: {}", heap.lock().unwrap().len());
+    //     // } else {
+    //     //     println!("[collect]   No value at this node");
+    //     // }
+    //     // Stop if we've exceeded target depth
+    //     if cur >= target_depth {
+    //         println!(
+    //             "[collect]   cur >= target, returning. Heap size: {}",
+    //             heap.lock().unwrap().len()
+    //         );
+    //         return;
+    //     }
+    //     // Continue traversing
+    //     if z.child_count() > 0 {
+    //         // println!("[collect]   Descending to {} children", z.child_count());
+    //         for b in z.child_mask().iter() {
+    //             // println!("[collect]   -> descending to byte {}", b);
+    //             z.descend_to_byte(b);
+    //             let child = z.fork_read_zipper();
+    //             self.collect_atoms_of_length_d(child, cur + 1, target_depth, heap);
+    //             z.ascend_byte();
+    //         }
+    //     } else {
+    //         // println!("[collect]   No children, returning");
+    //     }
+    //
+    //     println!(
+    //         "[collect] EXIT: path={:?}, heap_size={}",
+    //         z.origin_path(),
+    //         heap.lock().unwrap().len()
+    //     );
+    // }
 }
 
 impl Default for ChunkedPQTraverse {
@@ -392,7 +394,7 @@ impl ChunkedPQTraverse {
                 drop(h);
                 let read_root = z.fork_read_zipper();
                 println!("read root: {}", read_root.val_count());
-                self.collect_atoms_of_length_d(read_root, 0, self.depth, &self.heap);
+                self.collect_atoms_of_length_d(read_root, self.depth, &self.heap);
             }
         }
 

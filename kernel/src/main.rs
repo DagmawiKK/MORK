@@ -4349,7 +4349,7 @@ fn bench_cpq() {
 
     use std::cell::RefCell;
     thread_local! {
-        static CHUNKED_PQ: RefCell<ChunkedPQTraverse> = RefCell::new(ChunkedPQTraverse::new(3));
+        static CHUNKED_PQ: RefCell<ChunkedPQTraverse> = RefCell::new(ChunkedPQTraverse::new(20));
     }
     fn chunked_next_atom(
         z: ReadZipperTracked<U64AtomHeader>,
@@ -4363,7 +4363,6 @@ fn bench_cpq() {
     drop(guard);
     let mut sweep = sweep;
 
-    let mut chunked_pq = ChunkedPQTraverse::new(3);
     let engine1 =
         TraversalEngine::<U64AtomHeader>::new("chunked_priority_queue", chunked_next_atom);
 
