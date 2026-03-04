@@ -264,8 +264,8 @@ impl ChunkedPQTraverse {
                     path: z.origin_path().to_vec(),
                     score,
                 });
-                println!("heap size: {:?}", heap.lock().unwrap().len());
-                println!("heap {:?}", heap.lock().unwrap());
+                // println!("heap size: {:?}", heap.lock().unwrap().len());
+                // println!("heap {:?}", heap.lock().unwrap());
                 //}
 
                 if !z.to_next_k_path(target_depth) {
@@ -386,14 +386,14 @@ impl ChunkedPQTraverse {
     ) -> Result<AtomPosition, Infallible> {
         let val_count = z.val_count();
         //println!("val_count: {}", val_count);
-        println!("depth: {}", self.depth);
+        // println!("depth: {}", self.depth);
         {
             let mut h = self.heap.lock().unwrap();
             if h.is_empty() {
-                println!("is_empty");
+                // println!("is_empty");
                 drop(h);
                 let read_root = z.fork_read_zipper();
-                println!("read root: {}", read_root.val_count());
+                // println!("read root: {}", read_root.val_count());
                 self.collect_atoms_of_length_d(read_root, self.depth, &self.heap);
             }
         }

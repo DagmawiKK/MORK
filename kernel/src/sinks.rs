@@ -1159,7 +1159,6 @@ where
                     let Tag::SymbolSize(size) = byte_item(b) else {
                         unreachable!()
                     };
-                    println!("and size {size}");
                     prz.descend_to_byte(b);
                     debug_assert!(prz.path_exists());
                     if !prz.descend_first_k_path(size as _) {
@@ -1745,7 +1744,6 @@ where
             trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
             trace!(target: "sink", "ws sinking '{}'", serialize(mpath));
             let curr = wmap.get_val(mpath).unwrap_or(U64AtomHeader::default()).0;
-            println!("Setting weight: old: {:?}, delta: {}", curr, self.delta);
             let _ = &wmap.set_weighted_val(mpath, U64AtomHeader((curr as u64 + self.delta) as i32));
 
             trace!(target: "sink", "ws finalizing {:?}", wmap.get_val(mpath).unwrap_or(U64AtomHeader::default()).0);
