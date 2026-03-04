@@ -13,11 +13,13 @@ use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::ops::Add;
+use std::process::Output;
+use std::result;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 // use std::future::Future;
 // use std::task::Poll;
-use base64::Engine;
+use base64::{Engine, engine};
 use clap::builder::TypedValueParser;
 use clap::{Args, Parser as CLAParser, Subcommand, ValueEnum};
 use itertools::Itertools;
@@ -4285,7 +4287,7 @@ fn bench_was() {
     println!("bench_was completed successfully");
 }
 
-fn bench_random() {
+fn bench_cpq() {
     use mork::weightedsweep::*;
     use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, ZipperIteration, ZipperValues};
     use rand::seq::IndexedRandom;
@@ -4296,7 +4298,6 @@ fn bench_random() {
     };
 
     let mut s: Space<U64AtomHeader> = Space::new();
-
     let space_url = "https://raw.githubusercontent.com/Adam-Vandervorst/metta-examples/refs/heads/main/aunt-kg/simpsons.metta";
 
     let output = std::process::Command::new("curl")
@@ -4314,25 +4315,21 @@ fn bench_random() {
     s.add_all_sexpr(&output.stdout).unwrap();
     println!("Space loaded with {} atoms", s.btm.val_count());
 
-    // exec patterns to add weighted sweep operations for counting certain patterns in the space
     const ADD_EXEC: &str = r#"
-    (exec 0 (, (Individuals $x (Surname "Simpson"))) (O (ws 10 (FoundSimpson $x))) )
-    (exec 0 (, (Individuals $x (Sex "F"))) (O (ws 5 (FoundFemale $x))) )
-    (exec 0 (, (Relations $r (Husband $h))) (O (ws 8 (FoundHusband $h))) )
-    (exec 0 (, (Relations $r (Wife $w))) (O (ws 8 (FoundWife $w))) )
-    (exec 0 (, (Individuals $x (Givenname "Homer"))) (O (ws 20 (FoundHomer $x))) )
-    (exec 0 (, (Individuals $x (Givenname "Marge"))) (O (ws 20 (FoundMarge $x))) )
-    (exec 0 (, (Relations $r (Children $c))) (O (ws 15 (FoundChild $c))) )
-    (exec 0 (, (Head $x)) (O (ws 2 (FoundHead $x))) )
+        (exec 0 (, (Individuals 6 $y)) (O (ws 100 (Individuals 6 $y))) )
+        (exec 0 (, (Individuals $x $y)) (O (ws 5 (Individuals $x $y))) )
+
     "#;
 
-    let wsp = init_weight();
-    GLOBAL_WS_SWEEP.set(std::sync::Arc::new(wsp));
+    let sweep_for_global =
+        WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
+    *GLOBAL_WS_SWEEP.lock().unwrap() = Some(sweep_for_global);
 
     s.add_all_sexpr(ADD_EXEC.as_bytes()).unwrap();
 
     let mut t0 = std::time::Instant::now();
-    let steps = s.metta_calculus(100);
+    let steps = s.metta_calculus(100000);
+
     println!(
         "elapsed {} steps {} size {}",
         t0.elapsed().as_millis(),
@@ -4342,24 +4339,122 @@ fn bench_random() {
 
     fn analyze_atom(wz: &mut WriteZipperTracked<U64AtomHeader>, path: &[u8]) {
         let path_len = path.len();
-        std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
+        println!(
+            "path_len {}, \n ser {}\n, val_count {}",
+            path_len,
+            serialize(path),
+            wz.val_count()
+        );
     }
 
-    // Create the sweep
-    let mut sweep = WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
+    use std::cell::RefCell;
+    thread_local! {
+        static CHUNKED_PQ: RefCell<ChunkedPQTraverse> = RefCell::new(ChunkedPQTraverse::new(20));
+    }
+    fn chunked_next_atom(
+        z: ReadZipperTracked<U64AtomHeader>,
+    ) -> Result<AtomPosition, TraversalError> {
+        CHUNKED_PQ.with(|pq| pq.borrow_mut().next_atom(z).map_err(|_| TraversalError {}))
+    }
 
-    let engine1 = TraversalEngine::<U64AtomHeader>::new("random_sampler", next_atom);
+    // let mut sweep = WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
+    let mut guard = GLOBAL_WS_SWEEP.lock().unwrap();
+    let sweep = guard.take().expect("no sweep in global");
+    drop(guard);
+    let mut sweep = sweep;
+
+    let engine1 =
+        TraversalEngine::<U64AtomHeader>::new("chunked_priority_queue", chunked_next_atom);
+
     let process1 = sweep.add_engine(engine1);
     let analyze_op = Operation::new("analyze", analyze_atom);
+
     process1.subscribe(analyze_op);
 
     let controller = sweep.spawn();
     std::thread::sleep(std::time::Duration::from_secs(5));
+
     let result = controller.shutdown();
     assert!(result.is_ok(), "sweep shutdown should succeed");
 
-    println!("bench_random completed successfully");
+    println!("bench_cpq completed");
 }
+
+// fn bench_random() {
+//     use mork::weightedsweep::*;
+//     use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, ZipperIteration, ZipperValues};
+//     use rand::seq::IndexedRandom;
+//     use std::sync::Arc;
+//     use weighted_atom_sweep::{
+//         AtomHeader, AtomPosition, Operation, OperationObserver, TraversalEngine, TraversalError,
+//         WeightedAtomSweep, WeightedAtomSweepSettings,
+//     };
+//
+//     let mut s: Space<U64AtomHeader> = Space::new();
+//
+//     let space_url = "https://raw.githubusercontent.com/Adam-Vandervorst/metta-examples/refs/heads/main/aunt-kg/simpsons.metta";
+//
+//     let output = std::process::Command::new("curl")
+//         .args(&["-s", "-L", space_url])
+//         .output()
+//         .expect("Failed to execute curl command");
+//
+//     if !output.status.success() {
+//         panic!(
+//             "Failed to fetch space URL: {}",
+//             String::from_utf8_lossy(&output.stderr)
+//         );
+//     }
+//
+//     s.add_all_sexpr(&output.stdout).unwrap();
+//     println!("Space loaded with {} atoms", s.btm.val_count());
+//
+//     // exec patterns to add weighted sweep operations for counting certain patterns in the space
+//     const ADD_EXEC: &str = r#"
+//     (exec 0 (, (Individuals $x (Surname "Simpson"))) (O (ws 10 (FoundSimpson $x))) )
+//     (exec 0 (, (Individuals $x (Sex "F"))) (O (ws 5 (FoundFemale $x))) )
+//     (exec 0 (, (Relations $r (Husband $h))) (O (ws 8 (FoundHusband $h))) )
+//     (exec 0 (, (Relations $r (Wife $w))) (O (ws 8 (FoundWife $w))) )
+//     (exec 0 (, (Individuals $x (Givenname "Homer"))) (O (ws 20 (FoundHomer $x))) )
+//     (exec 0 (, (Individuals $x (Givenname "Marge"))) (O (ws 20 (FoundMarge $x))) )
+//     (exec 0 (, (Relations $r (Children $c))) (O (ws 15 (FoundChild $c))) )
+//     (exec 0 (, (Head $x)) (O (ws 2 (FoundHead $x))) )
+//     "#;
+//
+//     let wsp = init_weight();
+//     GLOBAL_WS_SWEEP.set(std::sync::Arc::new(wsp));
+//
+//     s.add_all_sexpr(ADD_EXEC.as_bytes()).unwrap();
+//
+//     let mut t0 = std::time::Instant::now();
+//     let steps = s.metta_calculus(100);
+//     println!(
+//         "elapsed {} steps {} size {}",
+//         t0.elapsed().as_millis(),
+//         steps,
+//         s.btm.val_count()
+//     );
+//
+//     fn analyze_atom(wz: &mut WriteZipperTracked<U64AtomHeader>, path: &[u8]) {
+//         let path_len = path.len();
+//         std::thread::sleep(std::time::Duration::from_micros(path_len as u64 * 10));
+//     }
+//
+//     // Create the sweep
+//     let mut sweep = WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
+//
+//     let engine1 = TraversalEngine::<U64AtomHeader>::new("random_sampler", next_atom);
+//     let process1 = sweep.add_engine(engine1);
+//     let analyze_op = Operation::new("analyze", analyze_atom);
+//     process1.subscribe(analyze_op);
+//
+//     let controller = sweep.spawn();
+//     std::thread::sleep(std::time::Duration::from_secs(5));
+//     let result = controller.shutdown();
+//     assert!(result.is_ok(), "sweep shutdown should succeed");
+//
+//     println!("bench_random completed successfully");
+// }
 
 /*fn match_case() {
     let mut s = Space::<U64AtomHeader>::new();
@@ -6553,7 +6648,7 @@ fn main() {
             for b in selected {
                 println!("=== benchmarking {} ===", b);
                 match b {
-                    "bench_random" => bench_random(),
+                    // "bench_random" => bench_random(),
                     "counter_machine" => {
                         bench_cm0(50);
                     }
@@ -6582,6 +6677,7 @@ fn main() {
                     "logic_query_act" => bench_logic_query_act(),
                     "flybase" => bench_flybase(),
                     // "was" => bench_was(),
+                    "chunked_pq" => bench_cpq(),
                     "tile_puzzle_states" => bench_tile_puzzle_states(),
                     s => {
                         println!("bench not known: {s}")
