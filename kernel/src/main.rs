@@ -6,7 +6,7 @@ use mork::{expr, prefix, sexpr};
 use mork_expr::{SourceItem, Tag, item_byte, serialize};
 use mork_frontend::bytestring_parser::Parser;
 use pathmap::PathMap;
-use pathmap::zipper::{Zipper, ZipperAbsolutePath, ZipperIteration, ZipperMoving};
+use pathmap::zipper::{Zipper, ZipperAbsolutePath, ZipperIteration, ZipperMoving, ZipperWriting};
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -4411,7 +4411,7 @@ fn bench_random() {
 
     // exec patterns to add weighted sweep operations for counting certain patterns in the space
     const ADD_EXEC: &str = r#"
-    (exec 0 (, (Individuals $x (Surname "Simpson"))) (O (ws 100 (Indivduals $x $y))) )
+    (exec 0 (, (Individuals 6 $y)) (O (ws 50 (Indivduals 6 $y))) )
     (exec 0 (, (Individuals $x $y)) (O (ws 5 (Individuals $x $y))) )
     "#;
 
@@ -4430,8 +4430,19 @@ fn bench_random() {
     );
 
     fn analyze_atom(wz: &mut WriteZipperTracked<U64AtomHeader>, path: &[u8]) {
-        let path_len = path.len();
-        println!("path_len {path_len},  val_count {:?}, \n path {}", wz.val().unwrap().0, serialize(path));
+        match wz.val() {
+            Some(&U64AtomHeader(v)) => {
+                if v >= 70 {
+                    println!("val_count {v}, \n path {}", serialize(path));
+                    wz.remove_branches(true);
+                    wz.remove_val(true);
+                }
+                else {
+                    wz.set_val(U64AtomHeader(v + 3));
+                }
+            }
+            None => {}
+        }
     }
     
     let mut guard = GLOBAL_WS_SWEEP.lock().unwrap();
@@ -4446,7 +4457,7 @@ fn bench_random() {
     process1.subscribe(analyze_op);
 
     let controller = sweep.spawn();
-    std::thread::sleep(std::time::Duration::from_secs(5));
+    std::thread::sleep(std::time::Duration::from_secs(10));
     let result = controller.shutdown();
     assert!(result.is_ok(), "sweep shutdown should succeed");
 
