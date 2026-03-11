@@ -4316,7 +4316,7 @@ fn bench_cpq() {
     println!("Space loaded with {} atoms", s.btm.val_count());
 
     const ADD_EXEC: &str = r#"
-        (exec 0 (, (Individuals 6 $y)) (O (ws 100 (Individuals 6 $y))) )
+        (exec 0 (, (Individuals 6 $y)) (O (ws 50 (Individuals 6 $y))) )
         (exec 0 (, (Individuals $x $y)) (O (ws 5 (Individuals $x $y))) )
 
     "#;
@@ -4337,14 +4337,35 @@ fn bench_cpq() {
         s.btm.val_count()
     );
 
-    fn analyze_atom(wz: &mut WriteZipperTracked<U64AtomHeader>, path: &[u8]) {
-        let path_len = path.len();
-        println!(
-            "path_len {}, \n ser {}\n, val_count {}",
-            path_len,
-            serialize(path),
-            wz.val_count()
-        );
+    fn analyze_atom(wz: &mut WriteZipperTracked<U64AtomHeader>, path: &mut Vec<u8>) {
+        match wz.val() {
+            Some(&U64AtomHeader(v)) => {
+                if v >= 70 {
+                    println!("val_count {v}, \n path {}", serialize(path.as_slice()));
+                    wz.remove_branches(true);
+                    wz.remove_val(true);
+                    return;
+                } else {
+                    wz.set_val(U64AtomHeader(v + 3));
+                }
+            }
+            None => {}
+        }
+
+        let children: Vec<u8> = wz.child_mask().iter().collect();
+        for b in children {
+            wz.descend_to_byte(b);
+            path.push(b);
+            analyze_atom(wz, path);
+            path.pop();
+            wz.ascend_byte();
+        }
+    }
+
+    // Entry wrapper Operation::new expects a function taking &[u8]
+    fn analyze_atom_entry(wz: &mut WriteZipperTracked<U64AtomHeader>, path: &[u8]) {
+        let mut path_buf = path.to_vec();
+        analyze_atom(wz, &mut path_buf);
     }
 
     use std::cell::RefCell;
@@ -4367,7 +4388,7 @@ fn bench_cpq() {
         TraversalEngine::<U64AtomHeader>::new("chunked_priority_queue", chunked_next_atom);
 
     let process1 = sweep.add_engine(engine1);
-    let analyze_op = Operation::new("analyze", analyze_atom);
+    let analyze_op = Operation::new("analyze", analyze_atom_entry);
 
     process1.subscribe(analyze_op);
 
