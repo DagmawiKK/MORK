@@ -1,7 +1,7 @@
 (inputfile 0 (arg 1390) (arg 0.9257))
 (inputfile 1 (arg 3490) (arg 1.2329))
 
-(myhex 0x48)
+(myhex 48)
 (exec 0 (, (myhex $x))
         (O (pure (myparsedhex $i) $i (i16_to_string (i8_as_i16 (decode_hex $x) ) )  ))
 )
@@ -16,9 +16,7 @@
         (product_f64 (i64_as_f64 (i64_from_string $x)) (f64_from_string $y))
         $normalized
     ))
-  (O (pure (result $i $res) $res (f64_to_string
-     $normalized
-  )))
+  (O (pure (result $i $res) $res (f64_to_string $normalized)))
 )
 
 
