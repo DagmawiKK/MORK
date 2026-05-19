@@ -1,0 +1,71 @@
+(Age Biniam 32)
+(Age Abenezer 23)
+(Age Nahom 27)
+(Age Nama 34)
+(Age Eyasu 27)
+
+(exec 0
+    (, (Age $x $y))
+    (O
+        (pure
+            (Lt_i16 $x $r)
+            $r
+            (lt_i16 (i16_from_string $y) (i16_from_string 28))
+        )
+    )
+)
+
+(exec 1
+    (, (Age $x $y))
+    (O
+        (pure
+            (Gt_i16 $x $r)
+            $r
+            (gt_i16 (i16_from_string $y) (i16_from_string 28))
+        )
+    )
+)
+
+(exec 2
+    (, (Age $x $y))
+    (O
+        (pure
+            (Eq_i16 $x $r)
+            $r
+            (eq_i16 (i16_from_string $y) (i16_from_string 27))
+        )
+    )
+)
+
+(exec 3
+    (, (Age $x $y))
+    (O
+        (pure
+            (Ne_i16 $x $r)
+            $r
+            (ne_i16 (i16_from_string $y) (i16_from_string 27))
+        )
+    )
+)
+
+(exec 4
+    (, (Age $x $y))
+    (O
+        (pure
+            (Le_i16 $x $r)
+            $r
+            (le_i16 (i16_from_string $y) (i16_from_string 28))
+        )
+    )
+)
+
+(exec 5
+    (, (Age $x $y))
+    (O
+        (pure
+            (Ge_i16 $x $r)
+            $r
+            (ge_i16 (i16_from_string $y) (i16_from_string 28))
+        )
+    )
+)
