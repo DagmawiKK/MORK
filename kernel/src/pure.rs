@@ -368,6 +368,23 @@ macro_rules! op {
         254 => (($x | $y) | $z),
         255 => !0,
     }};
+
+    // For Relational operators
+    // This macro returns true/ false
+    // Optionally, we can use num binary returning 1 or 0 
+    (bool_binary $name:ident($x:ident: $tx:ty, $y:ident: $ty:ty) => $e:expr) => {
+        pub extern "C" fn $name(expr: *mut ExprSource, sink: *mut ExprSink) -> Result<(), EvalError> {
+            let expr = unsafe { &mut *expr };
+            let sink = unsafe { &mut *sink };
+            let items = expr.consume_head_check(stringify!($name).as_bytes())?;
+            if items != 2 { return Err(EvalError::from(concat!(stringify!($name), " takes two arguments"))) }
+            let $x = expr.consume::<$tx>()?;
+            let $y = expr.consume::<$ty>()?;
+            let r : &[u8] = if $e {b"true"} else {b"false"};
+            sink.write(SourceItem::Symbol(r))?;
+            Ok(())
+        }
+    }
 }
 
 op!(num nulary u8_zeros() => 0u8);
@@ -588,6 +605,17 @@ op!(num nary min_i128(i128::MAX, t: i128, x: i128) => t.min(x));
 op!(num from_string i128_from_string<i128>);
 op!(num to_string i128_to_string<i128>);
 
+op!(num from_string u8_from_string<u8>);
+op!(num to_string u8_to_string<u8>);
+op!(num from_string u16_from_string<u16>);
+op!(num to_string u16_to_string<u16>);
+op!(num from_string u32_from_string<u32>);
+op!(num to_string u32_to_string<u32>);
+op!(num from_string u64_from_string<u64>);
+op!(num to_string u64_to_string<u64>);
+op!(num from_string u128_from_string<u128>);
+op!(num to_string u128_to_string<u128>);
+
 op!(num unary f64_as_i8(x: f64) => x as i8);
 op!(num unary f64_as_i16(x: f64) => x as i16);
 op!(num unary f64_as_i32(x: f64) => x as i32);
@@ -702,6 +730,80 @@ op!(num nary max_f32(f32::NEG_INFINITY, t: f32, x: f32) => t.max(x));
 op!(num nary min_f32(f32::INFINITY, t: f32, x: f32) => t.min(x));
 op!(num from_string f32_from_string<f32>);
 op!(num to_string f32_to_string<f32>);
+
+// Relational operators
+op!(bool_binary lt_u8(x:u8, y:u8) => x < y);
+op!(bool_binary lt_u16(x:u16, y:u16) => x < y);
+op!(bool_binary lt_u32(x:u32, y:u32) => x < y);
+op!(bool_binary lt_u64(x:u64, y:u64) => x < y);
+op!(bool_binary lt_u128(x:u128, y:u128) => x < y);
+op!(bool_binary lt_i8(x:i8, y:i8) => x < y);
+op!(bool_binary lt_i16(x:i16, y:i16) => x < y);
+op!(bool_binary lt_i32(x:i32, y:i32) => x < y);
+op!(bool_binary lt_i64(x:i64, y:i64) => x < y);
+op!(bool_binary lt_i128(x:i128, y:i128) => x < y);
+op!(bool_binary lt_f32(x:f32, y:f32) => x < y);
+op!(bool_binary lt_f64(x:f64, y:f64) => x < y);
+op!(bool_binary gt_u8(x:u8, y:u8) => x > y);
+op!(bool_binary gt_u16(x:u16, y:u16) => x > y);
+op!(bool_binary gt_u32(x:u32, y:u32) => x > y);
+op!(bool_binary gt_u64(x:u64, y:u64) => x > y);
+op!(bool_binary gt_u128(x:u128, y:u128) => x > y);
+op!(bool_binary gt_i8(x:i8, y:i8) => x > y);
+op!(bool_binary gt_i16(x:i16, y:i16) => x > y);
+op!(bool_binary gt_i32(x:i32, y:i32) => x > y);
+op!(bool_binary gt_i64(x:i64, y:i64) => x > y);
+op!(bool_binary gt_i128(x:i128, y:i128) => x > y);
+op!(bool_binary gt_f32(x:f32, y:f32) => x > y);
+op!(bool_binary gt_f64(x:f64, y:f64) => x > y);
+op!(bool_binary eq_u8(x:u8, y:u8) => x == y);
+op!(bool_binary eq_u16(x:u16, y:u16) => x == y);
+op!(bool_binary eq_u32(x:u32, y:u32) => x == y);
+op!(bool_binary eq_u64(x:u64, y:u64) => x == y);
+op!(bool_binary eq_u128(x:u128, y:u128) => x == y);
+op!(bool_binary eq_i8(x:i8, y:i8) => x == y);
+op!(bool_binary eq_i16(x:i16, y:i16) => x == y);
+op!(bool_binary eq_i32(x:i32, y:i32) => x == y);
+op!(bool_binary eq_i64(x:i64, y:i64) => x == y);
+op!(bool_binary eq_i128(x:i128, y:i128) => x == y);
+op!(bool_binary eq_f32(x:f32, y:f32) => x == y);
+op!(bool_binary eq_f64(x:f64, y:f64) => x == y);
+op!(bool_binary ne_u8(x:u8, y:u8) => x != y);
+op!(bool_binary ne_u16(x:u16, y:u16) => x != y);
+op!(bool_binary ne_u32(x:u32, y:u32) => x != y);
+op!(bool_binary ne_u64(x:u64, y:u64) => x != y);
+op!(bool_binary ne_u128(x:u128, y:u128) => x != y);
+op!(bool_binary ne_i8(x:i8, y:i8) => x != y);
+op!(bool_binary ne_i16(x:i16, y:i16) => x != y);
+op!(bool_binary ne_i32(x:i32, y:i32) => x != y);
+op!(bool_binary ne_i64(x:i64, y:i64) => x != y);
+op!(bool_binary ne_i128(x:i128, y:i128) => x != y);
+op!(bool_binary ne_f32(x:f32, y:f32) => x != y);
+op!(bool_binary ne_f64(x:f64, y:f64) => x != y);
+op!(bool_binary le_u8(x:u8, y:u8) => x <= y);
+op!(bool_binary le_u16(x:u16, y:u16) => x <= y);
+op!(bool_binary le_u32(x:u32, y:u32) => x <= y);
+op!(bool_binary le_u64(x:u64, y:u64) => x <= y);
+op!(bool_binary le_u128(x:u128, y:u128) => x <= y);
+op!(bool_binary le_i8(x:i8, y:i8) => x <= y);
+op!(bool_binary le_i16(x:i16, y:i16) => x <= y);
+op!(bool_binary le_i32(x:i32, y:i32) => x <= y);
+op!(bool_binary le_i64(x:i64, y:i64) => x <= y);
+op!(bool_binary le_i128(x:i128, y:i128) => x <= y);
+op!(bool_binary le_f32(x:f32, y:f32) => x <= y);
+op!(bool_binary le_f64(x:f64, y:f64) => x <= y);
+op!(bool_binary ge_u8(x:u8, y:u8) => x >= y);
+op!(bool_binary ge_u16(x:u16, y:u16) => x >= y);
+op!(bool_binary ge_u32(x:u32, y:u32) => x >= y);
+op!(bool_binary ge_u64(x:u64, y:u64) => x >= y);
+op!(bool_binary ge_u128(x:u128, y:u128) => x >= y);
+op!(bool_binary ge_i8(x:i8, y:i8) => x >= y);
+op!(bool_binary ge_i16(x:i16, y:i16) => x >= y);
+op!(bool_binary ge_i32(x:i32, y:i32) => x >= y);
+op!(bool_binary ge_i64(x:i64, y:i64) => x >= y);
+op!(bool_binary ge_i128(x:i128, y:i128) => x >= y);
+op!(bool_binary ge_f32(x:f32, y:f32) => x >= y);
+op!(bool_binary ge_f64(x:f64, y:f64) => x >= y);   
 
 pub extern "C" fn encode_hex(expr: *mut ExprSource, sink: *mut ExprSink) -> Result<(), EvalError> {
     let expr = unsafe { &mut *expr };
@@ -1100,6 +1202,17 @@ pub fn register(scope: &mut EvalScope) {
     scope.add_func("i128_from_string", i128_from_string, FuncType::Pure);
     scope.add_func("i128_to_string", i128_to_string, FuncType::Pure);
 
+    scope.add_func("u8_from_string", u8_from_string, FuncType::Pure);
+    scope.add_func("u8_to_string", u8_to_string, FuncType::Pure);
+    scope.add_func("u16_from_string", u16_from_string, FuncType::Pure);
+    scope.add_func("u16_to_string", u16_to_string, FuncType::Pure);
+    scope.add_func("u32_from_string", u32_from_string, FuncType::Pure);
+    scope.add_func("u32_to_string", u32_to_string, FuncType::Pure);
+    scope.add_func("u64_from_string", u64_from_string, FuncType::Pure);
+    scope.add_func("u64_to_string", u64_to_string, FuncType::Pure);
+    scope.add_func("u128_from_string", u128_from_string, FuncType::Pure);
+    scope.add_func("u128_to_string", u128_to_string, FuncType::Pure);
+
     scope.add_func("f64_as_i8", f64_as_i8, FuncType::Pure);
     scope.add_func("f64_as_i16", f64_as_i16, FuncType::Pure);
     scope.add_func("f64_as_i32", f64_as_i32, FuncType::Pure);
@@ -1213,4 +1326,78 @@ pub fn register(scope: &mut EvalScope) {
     scope.add_func("min_f32", min_f32, FuncType::Pure);
     scope.add_func("f32_from_string", f32_from_string, FuncType::Pure);
     scope.add_func("f32_to_string", f32_to_string, FuncType::Pure);
+
+    //Relational Operations on numbers
+    scope.add_func("lt_i8", lt_i8, FuncType::Pure);
+    scope.add_func("gt_i8", gt_i8, FuncType::Pure);
+    scope.add_func("le_i8", le_i8, FuncType::Pure);
+    scope.add_func("ge_i8", ge_i8, FuncType::Pure);
+    scope.add_func("eq_i8", eq_i8, FuncType::Pure);
+    scope.add_func("ne_i8", ne_i8, FuncType::Pure); 
+    scope.add_func("lt_i16", lt_i16, FuncType::Pure);
+    scope.add_func("gt_i16", gt_i16, FuncType::Pure);
+    scope.add_func("le_i16", le_i16, FuncType::Pure);
+    scope.add_func("ge_i16", ge_i16, FuncType::Pure);
+    scope.add_func("eq_i16", eq_i16, FuncType::Pure);
+    scope.add_func("ne_i16", ne_i16, FuncType::Pure);
+    scope.add_func("lt_i32", lt_i32, FuncType::Pure);
+    scope.add_func("gt_i32", gt_i32, FuncType::Pure);
+    scope.add_func("le_i32", le_i32, FuncType::Pure);
+    scope.add_func("ge_i32", ge_i32, FuncType::Pure);
+    scope.add_func("eq_i32", eq_i32, FuncType::Pure);
+    scope.add_func("ne_i32", ne_i32, FuncType::Pure);
+    scope.add_func("lt_i64", lt_i64, FuncType::Pure);
+    scope.add_func("gt_i64", gt_i64, FuncType::Pure);
+    scope.add_func("le_i64", le_i64, FuncType::Pure);
+    scope.add_func("ge_i64", ge_i64, FuncType::Pure);
+    scope.add_func("eq_i64", eq_i64, FuncType::Pure);   
+    scope.add_func("ne_i64", ne_i64, FuncType::Pure);
+    scope.add_func("lt_i128", lt_i128, FuncType::Pure);
+    scope.add_func("gt_i128", gt_i128, FuncType::Pure); 
+    scope.add_func("le_i128", le_i128, FuncType::Pure);
+    scope.add_func("ge_i128", ge_i128, FuncType::Pure);
+    scope.add_func("eq_i128", eq_i128, FuncType::Pure);
+    scope.add_func("ne_i128", ne_i128, FuncType::Pure);
+    scope.add_func("lt_f32", lt_f32, FuncType::Pure);
+    scope.add_func("gt_f32", gt_f32, FuncType::Pure);
+    scope.add_func("le_f32", le_f32, FuncType::Pure);
+    scope.add_func("ge_f32", ge_f32, FuncType::Pure);
+    scope.add_func("eq_f32", eq_f32, FuncType::Pure);
+    scope.add_func("ne_f32", ne_f32, FuncType::Pure);
+    scope.add_func("lt_f64", lt_f64, FuncType::Pure);
+    scope.add_func("gt_f64", gt_f64, FuncType::Pure);
+    scope.add_func("le_f64", le_f64, FuncType::Pure);
+    scope.add_func("ge_f64", ge_f64, FuncType::Pure);
+    scope.add_func("eq_f64", eq_f64, FuncType::Pure);   
+    scope.add_func("ne_f64", ne_f64, FuncType::Pure);
+    scope.add_func("lt_u8", lt_u8, FuncType::Pure);
+    scope.add_func("gt_u8", gt_u8, FuncType::Pure);
+    scope.add_func("le_u8", le_u8, FuncType::Pure);
+    scope.add_func("ge_u8", ge_u8, FuncType::Pure);
+    scope.add_func("eq_u8", eq_u8, FuncType::Pure);
+    scope.add_func("ne_u8", ne_u8, FuncType::Pure);
+    scope.add_func("lt_u16", lt_u16, FuncType::Pure);
+    scope.add_func("gt_u16", gt_u16, FuncType::Pure);
+    scope.add_func("le_u16", le_u16, FuncType::Pure);
+    scope.add_func("ge_u16", ge_u16, FuncType::Pure);
+    scope.add_func("eq_u16", eq_u16, FuncType::Pure);
+    scope.add_func("ne_u16", ne_u16, FuncType::Pure);
+    scope.add_func("lt_u32", lt_u32, FuncType::Pure);
+    scope.add_func("gt_u32", gt_u32, FuncType::Pure);
+    scope.add_func("le_u32", le_u32, FuncType::Pure);
+    scope.add_func("ge_u32", ge_u32, FuncType::Pure);
+    scope.add_func("eq_u32", eq_u32, FuncType::Pure);
+    scope.add_func("ne_u32", ne_u32, FuncType::Pure);
+    scope.add_func("lt_u64", lt_u64, FuncType::Pure);
+    scope.add_func("gt_u64", gt_u64, FuncType::Pure);
+    scope.add_func("le_u64", le_u64, FuncType::Pure);
+    scope.add_func("ge_u64", ge_u64, FuncType::Pure);
+    scope.add_func("eq_u64", eq_u64, FuncType::Pure);
+    scope.add_func("ne_u64", ne_u64, FuncType::Pure);
+    scope.add_func("lt_u128", lt_u128, FuncType::Pure); 
+    scope.add_func("gt_u128", gt_u128, FuncType::Pure);
+    scope.add_func("le_u128", le_u128, FuncType::Pure);
+    scope.add_func("ge_u128", ge_u128, FuncType::Pure);
+    scope.add_func("eq_u128", eq_u128, FuncType::Pure);
+    scope.add_func("ne_u128", ne_u128, FuncType::Pure);
 }
