@@ -94,6 +94,25 @@ macro_rules! op {
             Ok(())
         }
     };
+
+    // Why different from num from_string? 
+    // This doesn't need to be converted to bytes using to_be_bytes. 
+    // because Bool is 1 byte and endianess only works for more than 2 bytes.
+    // Endianess is a way to order bytes in mem for multibyte numbers. 
+    (bool from_string $name:ident) => {
+        pub extern "C" fn $name(expr: *mut ExprSource, sink: *mut ExprSink) -> Result<(), EvalError> {
+            let expr = unsafe { &mut *expr };
+            let sink = unsafe { &mut *sink };
+            let items = expr.consume_head_check(stringify!($name).as_bytes())?;
+            if items != 1 { return Err(EvalError::from("only takes one argument")) }
+            let SourceItem::Symbol(symbol) = expr.read() else { return Err(EvalError::from("only parses symbols")) };
+            let result: bool = str::from_utf8(symbol).map_err(|_| EvalError::from(concat!(stringify!($name), " parsing string not utf8")))?.parse().map_err(|_| EvalError::from(concat!("string not a valid type in ", stringify!($name))))?;
+            let r: &[u8] = if result { b"true" } else { b"false" };
+            sink.write(SourceItem::Symbol(r.into()))?;
+            Ok(())
+        }
+    };
+
     (num to_string $name:ident<$t:ty>) => {
         pub extern "C" fn $name(expr: *mut ExprSource, sink: *mut ExprSink) -> Result<(), EvalError> {
             let expr = unsafe { &mut *expr };
@@ -369,10 +388,9 @@ macro_rules! op {
         255 => !0,
     }};
 
-    // For Relational operators
-    // This macro returns true/ false
-    // Optionally, we can use num binary returning 1 or 0 
-    (bool_binary $name:ident($x:ident: $tx:ty, $y:ident: $ty:ty) => $e:expr) => {
+    // For Relational operators and boolean operators
+    // This macro returns true/false
+    (relational_binary $name:ident($x:ident: $tx:ty, $y:ident: $ty:ty) => $e:expr) => {
         pub extern "C" fn $name(expr: *mut ExprSource, sink: *mut ExprSink) -> Result<(), EvalError> {
             let expr = unsafe { &mut *expr };
             let sink = unsafe { &mut *sink };
@@ -732,78 +750,85 @@ op!(num from_string f32_from_string<f32>);
 op!(num to_string f32_to_string<f32>);
 
 // Relational operators
-op!(bool_binary lt_u8(x:u8, y:u8) => x < y);
-op!(bool_binary lt_u16(x:u16, y:u16) => x < y);
-op!(bool_binary lt_u32(x:u32, y:u32) => x < y);
-op!(bool_binary lt_u64(x:u64, y:u64) => x < y);
-op!(bool_binary lt_u128(x:u128, y:u128) => x < y);
-op!(bool_binary lt_i8(x:i8, y:i8) => x < y);
-op!(bool_binary lt_i16(x:i16, y:i16) => x < y);
-op!(bool_binary lt_i32(x:i32, y:i32) => x < y);
-op!(bool_binary lt_i64(x:i64, y:i64) => x < y);
-op!(bool_binary lt_i128(x:i128, y:i128) => x < y);
-op!(bool_binary lt_f32(x:f32, y:f32) => x < y);
-op!(bool_binary lt_f64(x:f64, y:f64) => x < y);
-op!(bool_binary gt_u8(x:u8, y:u8) => x > y);
-op!(bool_binary gt_u16(x:u16, y:u16) => x > y);
-op!(bool_binary gt_u32(x:u32, y:u32) => x > y);
-op!(bool_binary gt_u64(x:u64, y:u64) => x > y);
-op!(bool_binary gt_u128(x:u128, y:u128) => x > y);
-op!(bool_binary gt_i8(x:i8, y:i8) => x > y);
-op!(bool_binary gt_i16(x:i16, y:i16) => x > y);
-op!(bool_binary gt_i32(x:i32, y:i32) => x > y);
-op!(bool_binary gt_i64(x:i64, y:i64) => x > y);
-op!(bool_binary gt_i128(x:i128, y:i128) => x > y);
-op!(bool_binary gt_f32(x:f32, y:f32) => x > y);
-op!(bool_binary gt_f64(x:f64, y:f64) => x > y);
-op!(bool_binary eq_u8(x:u8, y:u8) => x == y);
-op!(bool_binary eq_u16(x:u16, y:u16) => x == y);
-op!(bool_binary eq_u32(x:u32, y:u32) => x == y);
-op!(bool_binary eq_u64(x:u64, y:u64) => x == y);
-op!(bool_binary eq_u128(x:u128, y:u128) => x == y);
-op!(bool_binary eq_i8(x:i8, y:i8) => x == y);
-op!(bool_binary eq_i16(x:i16, y:i16) => x == y);
-op!(bool_binary eq_i32(x:i32, y:i32) => x == y);
-op!(bool_binary eq_i64(x:i64, y:i64) => x == y);
-op!(bool_binary eq_i128(x:i128, y:i128) => x == y);
-op!(bool_binary eq_f32(x:f32, y:f32) => x == y);
-op!(bool_binary eq_f64(x:f64, y:f64) => x == y);
-op!(bool_binary ne_u8(x:u8, y:u8) => x != y);
-op!(bool_binary ne_u16(x:u16, y:u16) => x != y);
-op!(bool_binary ne_u32(x:u32, y:u32) => x != y);
-op!(bool_binary ne_u64(x:u64, y:u64) => x != y);
-op!(bool_binary ne_u128(x:u128, y:u128) => x != y);
-op!(bool_binary ne_i8(x:i8, y:i8) => x != y);
-op!(bool_binary ne_i16(x:i16, y:i16) => x != y);
-op!(bool_binary ne_i32(x:i32, y:i32) => x != y);
-op!(bool_binary ne_i64(x:i64, y:i64) => x != y);
-op!(bool_binary ne_i128(x:i128, y:i128) => x != y);
-op!(bool_binary ne_f32(x:f32, y:f32) => x != y);
-op!(bool_binary ne_f64(x:f64, y:f64) => x != y);
-op!(bool_binary le_u8(x:u8, y:u8) => x <= y);
-op!(bool_binary le_u16(x:u16, y:u16) => x <= y);
-op!(bool_binary le_u32(x:u32, y:u32) => x <= y);
-op!(bool_binary le_u64(x:u64, y:u64) => x <= y);
-op!(bool_binary le_u128(x:u128, y:u128) => x <= y);
-op!(bool_binary le_i8(x:i8, y:i8) => x <= y);
-op!(bool_binary le_i16(x:i16, y:i16) => x <= y);
-op!(bool_binary le_i32(x:i32, y:i32) => x <= y);
-op!(bool_binary le_i64(x:i64, y:i64) => x <= y);
-op!(bool_binary le_i128(x:i128, y:i128) => x <= y);
-op!(bool_binary le_f32(x:f32, y:f32) => x <= y);
-op!(bool_binary le_f64(x:f64, y:f64) => x <= y);
-op!(bool_binary ge_u8(x:u8, y:u8) => x >= y);
-op!(bool_binary ge_u16(x:u16, y:u16) => x >= y);
-op!(bool_binary ge_u32(x:u32, y:u32) => x >= y);
-op!(bool_binary ge_u64(x:u64, y:u64) => x >= y);
-op!(bool_binary ge_u128(x:u128, y:u128) => x >= y);
-op!(bool_binary ge_i8(x:i8, y:i8) => x >= y);
-op!(bool_binary ge_i16(x:i16, y:i16) => x >= y);
-op!(bool_binary ge_i32(x:i32, y:i32) => x >= y);
-op!(bool_binary ge_i64(x:i64, y:i64) => x >= y);
-op!(bool_binary ge_i128(x:i128, y:i128) => x >= y);
-op!(bool_binary ge_f32(x:f32, y:f32) => x >= y);
-op!(bool_binary ge_f64(x:f64, y:f64) => x >= y);   
+op!(relational_binary lt_u8(x:u8, y:u8) => x < y);
+op!(relational_binary lt_u16(x:u16, y:u16) => x < y);
+op!(relational_binary lt_u32(x:u32, y:u32) => x < y);
+op!(relational_binary lt_u64(x:u64, y:u64) => x < y);
+op!(relational_binary lt_u128(x:u128, y:u128) => x < y);
+op!(relational_binary lt_i8(x:i8, y:i8) => x < y);
+op!(relational_binary lt_i16(x:i16, y:i16) => x < y);
+op!(relational_binary lt_i32(x:i32, y:i32) => x < y);
+op!(relational_binary lt_i64(x:i64, y:i64) => x < y);
+op!(relational_binary lt_i128(x:i128, y:i128) => x < y);
+op!(relational_binary lt_f32(x:f32, y:f32) => x < y);
+op!(relational_binary lt_f64(x:f64, y:f64) => x < y);
+op!(relational_binary gt_u8(x:u8, y:u8) => x > y);
+op!(relational_binary gt_u16(x:u16, y:u16) => x > y);
+op!(relational_binary gt_u32(x:u32, y:u32) => x > y);
+op!(relational_binary gt_u64(x:u64, y:u64) => x > y);
+op!(relational_binary gt_u128(x:u128, y:u128) => x > y);
+op!(relational_binary gt_i8(x:i8, y:i8) => x > y);
+op!(relational_binary gt_i16(x:i16, y:i16) => x > y);
+op!(relational_binary gt_i32(x:i32, y:i32) => x > y);
+op!(relational_binary gt_i64(x:i64, y:i64) => x > y);
+op!(relational_binary gt_i128(x:i128, y:i128) => x > y);
+op!(relational_binary gt_f32(x:f32, y:f32) => x > y);
+op!(relational_binary gt_f64(x:f64, y:f64) => x > y);
+op!(relational_binary eq_u8(x:u8, y:u8) => x == y);
+op!(relational_binary eq_u16(x:u16, y:u16) => x == y);
+op!(relational_binary eq_u32(x:u32, y:u32) => x == y);
+op!(relational_binary eq_u64(x:u64, y:u64) => x == y);
+op!(relational_binary eq_u128(x:u128, y:u128) => x == y);
+op!(relational_binary eq_i8(x:i8, y:i8) => x == y);
+op!(relational_binary eq_i16(x:i16, y:i16) => x == y);
+op!(relational_binary eq_i32(x:i32, y:i32) => x == y);
+op!(relational_binary eq_i64(x:i64, y:i64) => x == y);
+op!(relational_binary eq_i128(x:i128, y:i128) => x == y);
+op!(relational_binary eq_f32(x:f32, y:f32) => x == y);
+op!(relational_binary eq_f64(x:f64, y:f64) => x == y);
+op!(relational_binary ne_u8(x:u8, y:u8) => x != y);
+op!(relational_binary ne_u16(x:u16, y:u16) => x != y);
+op!(relational_binary ne_u32(x:u32, y:u32) => x != y);
+op!(relational_binary ne_u64(x:u64, y:u64) => x != y);
+op!(relational_binary ne_u128(x:u128, y:u128) => x != y);
+op!(relational_binary ne_i8(x:i8, y:i8) => x != y);
+op!(relational_binary ne_i16(x:i16, y:i16) => x != y);
+op!(relational_binary ne_i32(x:i32, y:i32) => x != y);
+op!(relational_binary ne_i64(x:i64, y:i64) => x != y);
+op!(relational_binary ne_i128(x:i128, y:i128) => x != y);
+op!(relational_binary ne_f32(x:f32, y:f32) => x != y);
+op!(relational_binary ne_f64(x:f64, y:f64) => x != y);
+op!(relational_binary le_u8(x:u8, y:u8) => x <= y);
+op!(relational_binary le_u16(x:u16, y:u16) => x <= y);
+op!(relational_binary le_u32(x:u32, y:u32) => x <= y);
+op!(relational_binary le_u64(x:u64, y:u64) => x <= y);
+op!(relational_binary le_u128(x:u128, y:u128) => x <= y);
+op!(relational_binary le_i8(x:i8, y:i8) => x <= y);
+op!(relational_binary le_i16(x:i16, y:i16) => x <= y);
+op!(relational_binary le_i32(x:i32, y:i32) => x <= y);
+op!(relational_binary le_i64(x:i64, y:i64) => x <= y);
+op!(relational_binary le_i128(x:i128, y:i128) => x <= y);
+op!(relational_binary le_f32(x:f32, y:f32) => x <= y);
+op!(relational_binary le_f64(x:f64, y:f64) => x <= y);
+op!(relational_binary ge_u8(x:u8, y:u8) => x >= y);
+op!(relational_binary ge_u16(x:u16, y:u16) => x >= y);
+op!(relational_binary ge_u32(x:u32, y:u32) => x >= y);
+op!(relational_binary ge_u64(x:u64, y:u64) => x >= y);
+op!(relational_binary ge_u128(x:u128, y:u128) => x >= y);
+op!(relational_binary ge_i8(x:i8, y:i8) => x >= y);
+op!(relational_binary ge_i16(x:i16, y:i16) => x >= y);
+op!(relational_binary ge_i32(x:i32, y:i32) => x >= y);
+op!(relational_binary ge_i64(x:i64, y:i64) => x >= y);
+op!(relational_binary ge_i128(x:i128, y:i128) => x >= y);
+op!(relational_binary ge_f32(x:f32, y:f32) => x >= y);
+op!(relational_binary ge_f64(x:f64, y:f64) => x >= y);   
+
+// Boolean operators
+op!(bool from_string bool_from_string);
+op!(relational_binary and_bool(x: bool, y: bool) => x && y);
+op!(relational_binary or_bool(x: bool, y: bool) => x || y);
+op!(relational_binary xor_bool(x: bool, y: bool) => x ^ y);
+op!(relational_binary implies_bool(x: bool, y: bool) => !x || y); 
 
 pub extern "C" fn encode_hex(expr: *mut ExprSource, sink: *mut ExprSink) -> Result<(), EvalError> {
     let expr = unsafe { &mut *expr };
@@ -1400,4 +1425,11 @@ pub fn register(scope: &mut EvalScope) {
     scope.add_func("ge_u128", ge_u128, FuncType::Pure);
     scope.add_func("eq_u128", eq_u128, FuncType::Pure);
     scope.add_func("ne_u128", ne_u128, FuncType::Pure);
+    
+    // boolean opeators
+    scope.add_func("bool_from_string", bool_from_string, FuncType::Pure);
+    scope.add_func("and_bool", and_bool, FuncType::Pure);
+    scope.add_func("or_bool", or_bool, FuncType::Pure);
+    scope.add_func("xor_bool", xor_bool, FuncType::Pure);
+    scope.add_func("implies_bool", implies_bool, FuncType::Pure);
 }

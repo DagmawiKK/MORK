@@ -205,6 +205,36 @@ impl DeserializableExpr for &str {
     }
 }
 
+// For parsing bool types from mm2,
+// since Expr consume function for implements DesirilizableExpr trait. 
+impl DeserializableExpr for bool {
+    #[inline(always)]
+    fn advanced(e: Expr) -> usize {
+        unsafe {
+            let Tag::SymbolSize(arity) = byte_item(*e.ptr) else { panic!("wrong symbol for bool") };
+            1usize + (arity as usize)
+        }
+    }
+    #[inline(always)]
+    fn check(e: Expr) -> bool {
+        unsafe {
+            let Tag::SymbolSize(arity) = byte_item(*e.ptr) else { return false; };
+            let s = slice_from_raw_parts(e.ptr.add(1), arity as _);
+            let bytes = s.as_ref().unwrap();
+            bytes == b"true" || bytes == b"false"
+        }
+    }
+    #[inline(always)]
+    fn deserialize_unchecked(e: Expr) -> Self {
+        unsafe {
+            let Tag::SymbolSize(arity) = byte_item(*e.ptr) else { unreachable!() };
+            let s = slice_from_raw_parts(e.ptr.add(1), arity as _);
+            let bytes = s.as_ref().unwrap();
+            bytes == b"true"
+        }
+    }
+}
+
 macro_rules! impl_deserializable {
     (be $t:ty) => {
         impl DeserializableExpr for $t {
