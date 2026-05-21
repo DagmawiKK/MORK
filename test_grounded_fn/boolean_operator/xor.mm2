@@ -1,0 +1,44 @@
+(match idk)
+
+(exec 0
+    (, (match $x))
+    (O
+        (pure
+            (false xor false => $r)
+            $r
+            (xor_bool (bool_from_string false) (bool_from_string false))
+        )
+    )
+)
+
+(exec 1 
+    (, (match $x))
+    (O
+        (pure
+            (true xor false => $r)
+            $r
+            (xor_bool (bool_from_string true) (bool_from_string false))
+        )
+    )
+)
+(exec 2
+    (, (match $x))
+    (O
+        (pure
+            (false xor true => $r)
+            $r
+            (xor_bool (bool_from_string false) (bool_from_string true))
+        )
+    )
+)
+
+(exec 3
+    (, (match $x))
+    (O
+        (pure
+            (true xor true => $r)
+            $r
+            (xor_bool (bool_from_string true) (bool_from_string true))
+        )
+    )
+)

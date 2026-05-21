@@ -1,16 +1,44 @@
-(Age Biniam 32)
-(Age Abenezer 23)
-(Age Nahom 27)
-(Age Nama 34)
-(Age Eyasu 27)
+(match idk)
 
 (exec 0
-    (, (Age $x $y))
-    (O 
-        (pure 
-            (Val $x $r)
+    (, (match $x))
+    (O
+        (pure
+            (false Implies false => $r)
             $r
-            (lt_i32 (i32_from_string $y) (i32_from_string 22))
+            (implies_bool (bool_from_string false) (bool_from_string false))
+        )
+    )
+)
+
+(exec 1
+    (, (match $x))
+    (O
+        (pure
+            (true Implies false => $r)
+            $r
+            (implies_bool (bool_from_string true) (bool_from_string false))
+        )
+    )
+)
+(exec 2
+    (, (match $x))
+    (O
+        (pure
+            (false Implies true => $r)
+            $r
+            (implies_bool (bool_from_string false) (bool_from_string true))
+        )
+    )
+)
+
+(exec 3
+    (, (match $x))
+    (O
+        (pure
+            (true Implies true => $r)
+            $r
+            (implies_bool (bool_from_string true) (bool_from_string true))
         )
     )
 )

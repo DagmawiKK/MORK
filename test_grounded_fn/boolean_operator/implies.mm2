@@ -1,0 +1,44 @@
+(match idk)
+
+(exec 0
+    (, (match $x))
+    (O
+        (pure
+            (false Implies false => $r)
+            $r
+            (implies_bool (lt_i32 (i32_from_string 55) (i32_from_string 53)) (lt_i32 (i32_from_string 32) (i32_from_string 31)))
+        )
+    )
+)
+
+(exec 1
+    (, (match $x))
+    (O
+        (pure
+            (true Implies false => $r)
+            $r
+            (implies_bool (gt_i32 (i32_from_string 53) (i32_from_string 52)) (ge_i32 (i32_from_string 53) (i32_from_string 54)))
+        )
+    )
+)
+(exec 2
+    (, (match $x))
+    (O
+        (pure
+            (false Implies true => $r)
+            $r
+            (implies_bool (ge_i32 (i32_from_string 53) (i32_from_string 54)) (gt_i32 (i32_from_string 53) (i32_from_string 52)))
+        )
+    )
+)
+
+(exec 3
+    (, (match $x))
+    (O
+        (pure
+            (true Implies true => $r)
+            $r
+            (implies_bool (gt_i32 (i32_from_string 53) (i32_from_string 52)) (gt_i32 (i32_from_string 53) (i32_from_string 52)))
+        )
+    )
+)
