@@ -4362,10 +4362,12 @@ fn bench_cpq() {
         }
     }
 
-    // Entry wrapper Operation::new expects a function taking &[u8]
+    // Entry wrapper: descend to atom_path (zipper now at root from sweep.rs)
     fn analyze_atom_entry(wz: &mut WriteZipperTracked<U64AtomHeader>, path: &[u8]) {
+        wz.descend_to(path);
         let mut path_buf = path.to_vec();
         analyze_atom(wz, &mut path_buf);
+        wz.ascend(path.len());
     }
 
     use std::cell::RefCell;
