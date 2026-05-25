@@ -1,0 +1,53 @@
+;; ============================================================
+;; MLN Gibbs Sampling via Weighted Atom Sweep + MM2
+;;
+;; Variables: A, B  (Boolean, value 0/1)
+;; Clause: (not A B) with weight 2.0
+;;
+;; The clause (not A B) = (¬A ∨ B) is satisfied when:
+;;   A=0 (¬A=1) or B=1
+;;
+;; WAS scheduling: each variable has a weight.
+;; Weight is set by ws sink via exec rule.
+;;
+;; ALWAYS-FLIP: each visited variable toggles value.
+;; Metropolis acceptance will be added in a future version.
+;; ============================================================
+
+;; ---- Variables with initial values and WAS weights ----
+(W A 1)
+(W B 1)
+(Val A 0)
+(Val B 0)
+
+;; ---- Clauses ---
+(Clause c1 2.0 (not A B))
+
+;; ---- Incidence index ----
+(InClause A c1)
+(InClause B c1)
+
+;; ---- Clause polarity ----
+(Polarity c1 A -1)
+(Polarity c1 B +1)
+
+;; ---- WAS weight setup via ws sink ----
+;; For each (W $x $w) atom, ws sink adds $w to the
+;; sweep map's header value for that path.
+(exec init-weights
+  (, (W $x $w))
+  (O (ws 1 (W $x $w))))
+
+;; ---- Always-flip Gibbs loop ----
+;; Self-referencing exec: matches (Val $n $v), adds
+;; (Val $n $nv) where $nv is the flipped value via
+;; the Flip lookup table, and re-schedules itself.
+(Flip 0 1)
+(Flip 1 0)
+
+(exec flip-state
+  (, (exec flip-state $p $t)
+     (Val $n $v)
+     (Flip $v $nv))
+  (, (Val $n $nv)
+     (exec flip-state $p $t)))
