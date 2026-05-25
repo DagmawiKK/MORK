@@ -4403,6 +4403,109 @@ fn bench_cpq() {
     println!("bench_cpq completed");
 }
 
+fn bench_mln_flip() {
+    use pathmap::PathMap;
+    use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, ZipperCreation, ZipperValues};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use weighted_atom_sweep::{
+        AtomHeader, AtomPosition, Operation, OperationObserver, TraversalEngine, TraversalError,
+        WeightedAtomSweep, WeightedAtomSweepSettings,
+    };
+
+    static VISIT_COUNTS: std::sync::LazyLock<Mutex<HashMap<Vec<u8>, usize>>> =
+        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    // Build trie with weighted atoms, share with sweep
+    let mut pm: PathMap<U64AtomHeader> = PathMap::new();
+    pm.set_val_at(b"ValX", U64AtomHeader(60));
+    pm.set_val_at(b"ValY", U64AtomHeader(20));
+    pm.set_val_at(b"ValZ", U64AtomHeader(40));
+    pm.set_val_at(b"ValW", U64AtomHeader(10));
+
+    let total_atoms = pm.val_count();
+    println!("Trie ready, {total_atoms} atoms");
+
+    let zh = pm.into_zipper_head([]);
+    let mut sweep =
+        WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
+    sweep.map.inner = std::sync::Arc::new(zh);
+
+    fn flip_val(wz: &mut WriteZipperTracked<U64AtomHeader>, atom_path: &[u8]) {
+        if let Ok(mut counts) = VISIT_COUNTS.lock() {
+            *counts.entry(atom_path.to_vec()).or_insert(0) += 1;
+        }
+        wz.reset();
+        wz.descend_to(atom_path);
+        let hdr = match wz.val() {
+            Some(&U64AtomHeader(v)) => v,
+            None => {
+                wz.ascend(atom_path.len());
+                return;
+            }
+        };
+        wz.set_val(U64AtomHeader(hdr ^ 1));
+    }
+
+    fn weighted_traverse(
+        z: ReadZipperTracked<U64AtomHeader>,
+    ) -> Result<AtomPosition, TraversalError> {
+        mork::weightedsweep::next_atom(z).map_err(|_| TraversalError {})
+    }
+
+    for path in [b"ValX", b"ValY", b"ValZ", b"ValW"] {
+        VISIT_COUNTS.lock().unwrap().entry(path.to_vec()).or_insert(0);
+    }
+
+    let engine = TraversalEngine::new("weighted_next_atom", weighted_traverse);
+    sweep.add_engine(engine).subscribe(Operation::new("flip", flip_val));
+
+    let map_arc = sweep.map.inner.clone();
+    let controller = sweep.spawn();
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    let result = controller.shutdown();
+    assert!(result.is_ok(), "sweep shutdown should succeed");
+
+    // Dump final state and visit distribution
+    {
+        let mut rz = map_arc.read_zipper_at_borrowed_path(&[]).unwrap();
+        let mut count = 0;
+        let mut sum = 0i32;
+        while rz.to_next_val() {
+            if let Some(&U64AtomHeader(hdr)) = rz.val() {
+                println!("  final atom {} header={}, value={}", count, hdr, hdr & 1);
+                sum += hdr & 1;
+            }
+            count += 1;
+        }
+        println!("Final {count} atoms, sum_of_values={sum}");
+    }
+
+    {
+        let counts = VISIT_COUNTS.lock().unwrap();
+        let mut pairs: Vec<_> = counts.iter().collect();
+        pairs.sort_by_key(|(path, _)| std::str::from_utf8(path).unwrap_or("?").to_string());
+        let total: usize = pairs.iter().map(|(_, c)| **c).sum();
+        println!("\nVisit distribution ({total} total):");
+        for (path, count) in &pairs {
+            let label = std::str::from_utf8(path).unwrap_or("?");
+            let header: i32 = {
+                let mut rz = map_arc.read_zipper_at_path(path).unwrap();
+                match rz.val() {
+                    Some(&U64AtomHeader(h)) => h,
+                    None => 0,
+                }
+            };
+            let weight = (header - (header & 1)) / 2;
+            let frac = if total > 0 { **count as f64 / total as f64 } else { 0.0 };
+            let c = **count;
+            println!("  {label}: visits={c:>4} ({frac:.3}) weight={weight}");
+        }
+    }
+
+    println!("bench_mln_flip completed successfully");
+}
+
 fn bench_random() {
     use mork::weightedsweep::*;
     use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, ZipperIteration, ZipperValues};
@@ -6709,6 +6812,7 @@ fn main() {
                     "flybase" => bench_flybase(),
                     // "was" => bench_was(),
                     "chunked_pq" => bench_cpq(),
+                    "mln_flip" => bench_mln_flip(),
                     "tile_puzzle_states" => bench_tile_puzzle_states(),
                     s => {
                         println!("bench not known: {s}")
