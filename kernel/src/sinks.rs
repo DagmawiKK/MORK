@@ -494,45 +494,70 @@ where
     }
 }
 
-// pub struct RemoveSink { e: Expr, remove: PathMap<()> }
-// // perhaps more performant to graft, remove*, and graft back?
-// impl<H> Sink<H> for RemoveSink
-// where
-//     H: AtomHeader + Default
-// {
-//     fn new(e: Expr) -> Self { RemoveSink { e, remove: PathMap::new() } }
-//     fn request(&self) ->  impl Iterator<Item=WriteResourceRequest> {
-//         // !! we're never grabbing the full expression path, because then we don't have the ability to remove the root value
-//         let p = &unsafe { self.e.prefix().unwrap_or_else(|x| { let s = self.e.span(); slice_from_raw_parts(self.e.ptr, s.len() - 1) }).as_ref().unwrap() }[3..];
-//         trace!(target: "sink", "- requesting {}", serialize(p));
-//         std::iter::once(WriteResourceRequest::BTM(p))
-//     }
-//     fn sink<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k, H>>>(&mut self, mut it: It, path: &[u8]) where 'a : 'w, 'k : 'w {
-//         let WriteResource::BTM(wz) = it.next().unwrap() else { unreachable!() };
-//         let mpath = &path[3+wz.root_prefix_path().len()..];
-//         trace!(target: "sink", "- at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
-//         trace!(target: "sink", "- sinking '{}'", serialize(mpath));
-//         self.remove.insert(mpath, ());
-//     }
-//     fn finalize<'w, 'a, 'k, It : Iterator<Item=WriteResource<'w, 'a, 'k, H>>>(&mut self, mut it: It) -> bool where 'a : 'w, 'k : 'w {
-//         let WriteResource::BTM(wz) = it.next().unwrap() else { unreachable!() };
-//         wz.reset();
-//         trace!(target: "sink", "- finalizing by subtracting {} at '{}'", self.remove.val_count(), serialize(wz.origin_path()));
-//         // match self.remove.remove(&[]) {
-//         //     None => {}
-//         //     Some(s) => {
-//         //         println!("has root");
-//         //         wz.remove_val(true);
-//         //         println!("val not removed");
-//         //     }
-//         // }
-//         match wz.subtract_into(&self.remove.read_zipper(), true) {
-//             AlgebraicStatus::Element => { true }
-//             AlgebraicStatus::Identity => { false }
-//             AlgebraicStatus::None => { true } // GOAT maybe not?
-//         }
-//     }
-// }
+pub struct RemoveSink {
+    e: Expr,
+    remove: PathMap<()>,
+}
+impl<H> Sink<H> for RemoveSink
+where
+    H: AtomHeader + Default,
+{
+    fn new(e: Expr) -> Self {
+        RemoveSink { e, remove: PathMap::new() }
+    }
+    fn request(&self) -> impl Iterator<Item = WriteResourceRequest> {
+        let p = &unsafe {
+            self.e
+                .prefix()
+                .unwrap_or_else(|x| self.e.span())
+                .as_ref()
+                .unwrap()
+        }[3..];
+        trace!(target: "sink", "- requesting {}", serialize(p));
+        std::iter::once(WriteResourceRequest::BTM(p))
+    }
+    fn sink<'w, 'a, 'k, It: Iterator<Item = WriteResource<'w, 'a, 'k, H>>>(
+        &mut self,
+        mut it: It,
+        path: &[u8],
+    ) where
+        'a: 'w,
+        'k: 'w,
+    {
+        let WriteResource::BTM(wz) = it.next().unwrap() else {
+            unreachable!()
+        };
+        let mpath = &path[3 + wz.root_prefix_path().len()..];
+        trace!(target: "sink", "- at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
+        trace!(target: "sink", "- sinking '{}'", serialize(mpath));
+        self.remove.insert(mpath, ());
+    }
+    fn finalize<'w, 'a, 'k, It: Iterator<Item = WriteResource<'w, 'a, 'k, H>>>(
+        &mut self,
+        mut it: It,
+    ) -> bool
+    where
+        'a: 'w,
+        'k: 'w,
+    {
+        let WriteResource::BTM(wz) = it.next().unwrap() else {
+            unreachable!()
+        };
+        wz.reset();
+        let mut rz = self.remove.read_zipper();
+        let mut changed = false;
+        while rz.to_next_val() {
+            let mpath = rz.path();
+            wz.descend_to(mpath);
+            if wz.is_val() {
+                wz.remove_val(true);
+                changed = true;
+            }
+            wz.ascend(mpath.len());
+        }
+        changed
+    }
+}
 
 // pub struct HeadSink { e: Expr, head: PathMap<()>, skip: usize, count: usize, max: usize, top: Vec<u8> }
 // impl<H> Sink<H> for HeadSink
@@ -1800,7 +1825,7 @@ where
 
 pub enum ASink<H: AtomHeader + Default> {
     AddSink(AddSink),
-    // RemoveSink(RemoveSink),
+    RemoveSink(RemoveSink),
     // HeadSink(HeadSink),
     CountSink(CountSink),
     HashSink(HashSink),
@@ -1827,10 +1852,13 @@ impl<H: AtomHeader + Default> ASink<H> {
 
 impl<H: AtomHeader + Default> Sink<H> for ASink<H> {
     fn new(e: Expr) -> Self {
-        // if unsafe { *e.ptr == item_byte(Tag::Arity(2)) && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(1)) && *e.ptr.offset(2) == b'-' } {
-        //     ASink::RemoveSink(RemoveSink::new(e))
-        // } else
         if unsafe {
+            *e.ptr == item_byte(Tag::Arity(2))
+                && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(1))
+                && *e.ptr.offset(2) == b'-'
+        } {
+            ASink::RemoveSink(<RemoveSink as Sink<H>>::new(e))
+        } else if unsafe {
             *e.ptr == item_byte(Tag::Arity(2))
                 && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(1))
                 && *e.ptr.offset(2) == b'+'
@@ -1968,8 +1996,7 @@ impl<H: AtomHeader + Default> Sink<H> for ASink<H> {
                         yield i
                     }
                 }
-                // ASink::RemoveSink(s) => { for i in s.request().into_iter() { yield i } }
-                // ASink::HeadSink(s) => { for i in s.request().into_iter() { yield i } }
+                ASink::RemoveSink(s) => { for i in Sink::<H>::request(s).into_iter() { yield i } }
                 ASink::CountSink(s) => {
                     for i in Sink::<H>::request(s).into_iter() {
                         yield i
@@ -2039,8 +2066,7 @@ impl<H: AtomHeader + Default> Sink<H> for ASink<H> {
             ASink::AddSink(s) => s.sink(it, path),
             ASink::USink(s) => s.sink(it, path),
             ASink::AUSink(s) => s.sink(it, path),
-            // ASink::RemoveSink(s) => { s.sink(it, path) }
-            // ASink::HeadSink(s) => { s.sink(it, path) }
+            ASink::RemoveSink(s) => { Sink::<H>::sink(s, it, path) }
             ASink::CountSink(s) => s.sink(it, path),
             ASink::HashSink(s) => s.sink(it, path),
             ASink::SumSink(s) => s.sink(it, path),
@@ -2069,8 +2095,7 @@ impl<H: AtomHeader + Default> Sink<H> for ASink<H> {
             ASink::AddSink(s) => s.finalize(it),
             ASink::USink(s) => s.finalize(it),
             ASink::AUSink(s) => s.finalize(it),
-            // ASink::RemoveSink(s) => { s.finalize(it) }
-            // ASink::HeadSink(s) => { s.finalize(it) }
+            ASink::RemoveSink(s) => { Sink::<H>::finalize(s, it) }
             ASink::CountSink(s) => s.finalize(it),
             ASink::HashSink(s) => s.finalize(it),
             ASink::SumSink(s) => s.finalize(it),
