@@ -1541,7 +1541,18 @@ where
                         'vals: while rz.to_next_val() {
                             let p = rz.origin_path();
                             trace!(target: "sink", "path number {:?}", serialize(&p[clen..]));
-                            todo!();
+                            let mut res = match self.scope.eval(ExprSource::new(&p[clen])) {
+                                Ok(res) => res,
+                                Err(er) => {
+                                    trace!(target: "pure", "err {}", er);
+                                    continue 'vals;
+                                }
+                            };
+                            trace!(target: "sink", "symbol result {:?}", serialize(&res[..]));
+                            wz.move_to_path(&res[wz.root_prefix_path().len()..]);
+                            wz.set_val(H::default());
+                            changed |= true;
+                            self.scope.return_alloc(res);
                         }
 
                         if !prz.to_next_k_path(size as _) {
@@ -1558,7 +1569,30 @@ where
                     .and(&ByteMask(crate::space::ARITIES))
                     .iter()
                 {
-                    todo!();
+                    prz.descend_to_byte(b);
+                    if prz.path_exists() {
+                        let clen2 = prz.origin_path().len();
+                        let mut rz2 = prz.fork_read_zipper();
+                        while rz2.to_next_val() {
+                            let p2 = rz2.origin_path();
+                            trace!(target: "sink", "arity val {:?}", serialize(&p2[clen2..]));
+                            let mut res = match self.scope.eval(ExprSource::new(&p2[clen2])) {
+                                Ok(res) => res,
+                                Err(er) => {
+                                    trace!(target: "pure", "err {}", er);
+                                    continue;
+                                }
+                            };
+                            trace!(target: "sink", "arity result {:?}", serialize(&res[..]));
+                            wz.move_to_path(&res[wz.root_prefix_path().len()..]);
+                            wz.set_val(H::default());
+                            changed |= true;
+                            self.scope.return_alloc(res);
+                        }
+                    }
+                    if !prz.ascend_byte() {
+                        unreachable!()
+                    }
                 }
 
                 if prz.descend_to_existing_byte(item_byte(Tag::NewVar)) {
