@@ -1131,7 +1131,10 @@ impl Sink for PureSink {
                         trace!(target: "sink", "path {:?}", serialize(p));
                         trace!(target: "sink", "path {:?}", serialize(&p[clen..]));
 
-                        let mut res = match self.scope.eval(ExprSource::new(&p[clen])) {
+                        // Use p[clen..].as_ptr() instead of &p[clen] to respect strict pointer
+                        // provenance: &p[clen] creates a reference with provenance limited to one
+                        // byte, causing UB when EvalScope reads beyond that byte during evaluation.
+                        let mut res = match self.scope.eval(ExprSource::new(p[clen..].as_ptr())) {
                             Ok(res) => { res }
                             Err(er) => { trace!(target: "pure", "err {}", er); continue 'vals }
                         };
