@@ -1,0 +1,73 @@
+;; Tests for basic list extraction and metadata operations:
+;; first, first-from-pair, second-from-pair, size-atom, car-atom, and cdr-atom.
+
+;; ---------------- DATA SETUP ----------------
+(list_data empty ())
+(list_data single (a))
+(list_data flat (a b c d))
+(list_data nested (a (b c) ((d)) e))
+
+;; ---------------- 1. FIRST-FROM-PAIR / FIRST ----------------
+(exec 1
+    (, (list_data $type $x))
+    (O  (pure 
+            (Test First $type $head)
+            $head
+            (first (' $x))
+        )
+    )
+)
+
+(exec 2
+    (, (list_data $type $x))
+    (O  (pure 
+            (Test FirstFromPair $type $head)
+            $head
+            (first-from-pair (' $x))
+        )
+    )
+)
+
+;; ---------------- 2. SECOND-FROM-PAIR ----------------
+(exec 3
+    (, (list_data $type $x))
+    (O  (pure 
+            (Test SecondFromPair $type $second)
+            $second
+            (second-from-pair (' $x))
+        )
+    )
+)
+
+;; ---------------- 3. SIZE-ATOM ----------------
+(exec 4
+    (, (list_data $type $x))
+    (O  (pure 
+            (Test SizeAtom $type $n)
+            $n
+            (size-atom (' $x))
+        )
+    )
+)
+
+;; ---------------- 4. CAR-ATOM ----------------
+(exec 5
+    (, (list_data $type $x))
+    (O  (pure 
+            (Test CarAtom $type $head)
+            $head
+            (car-atom (' $x))
+        )
+    )
+)
+
+;; ---------------- 5. CDR-ATOM ----------------
+(exec 6
+    (, (list_data $type $x))
+    (O  (pure 
+            (Test CdrAtom $type $tail)
+            $tail
+            (cdr-atom (' $x))
+        )
+    )
+)

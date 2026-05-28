@@ -1,0 +1,58 @@
+;; Tests for list membership operations: index-atom and is-member.
+;; Validates both successful and unsuccessful element lookups.
+
+;; ---------------- TEST DATA ----------------
+(member_data my_list (a b c))
+
+;; ---------------- 1. INDEX-ATOM ----------------
+(exec 1
+    (, (member_data $type $x))
+    (O  (pure 
+            (Test Index $type 0 $result)
+            $result
+            (index-atom (' $x) 0)
+        )
+    )
+)
+
+(exec 2
+    (, (member_data $type $x))
+    (O  (pure 
+            (Test Index $type 1 $result)
+            $result
+            (index-atom (' $x) 1)
+        )
+    )
+)
+
+(exec 3
+    (, (member_data $type $x))
+    (O  (pure 
+            (Test Index $type 2 $result)
+            $result
+            (index-atom (' $x) 2)
+        )
+    )
+)
+
+;; ---------------- 2. IS-MEMBER (found) ----------------
+(exec 4
+    (, (member_data $type $x))
+    (O  (pure 
+            (Test IsMemberFound $type $result)
+            $result
+            (is-member a (' $x))
+        )
+    )
+)
+
+;; ---------------- 3. IS-MEMBER (not found) ----------------
+(exec 5
+    (, (member_data $type $x))
+    (O  (pure 
+            (Test IsMemberNotFound $type $result)
+            $result
+            (is-member z (' $x))
+        )
+    )
+)

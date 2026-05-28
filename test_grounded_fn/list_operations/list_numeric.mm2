@@ -1,0 +1,34 @@
+;; Tests for numeric list operations: min-atom and max-atom.
+;; Validates minimum and maximum extraction across integers and floats.
+
+;; ---------------- NUMERIC DATA for MIN/MAX ----------------
+(num_data single (5))
+(num_data ints (3 8 1 6 2))
+(num_data negative (-5 0 3))
+(num_data floats (3.14 2.71 1.41))
+
+;; ---------------- 4. MIN-ATOM ----------------
+;; Edge cases: empty should fail/skip
+;; Expected: single=5, ints=1, negative=-5, floats=1.41
+(exec 4
+    (, (num_data $type $x))
+    (O  (pure 
+            (Test MinAtom $type $result)
+            $result
+            (min-atom (' $x))
+        )
+    )
+)
+
+;; ---------------- 5. MAX-ATOM ----------------
+;; Edge cases: empty should fail/skip
+;; Expected: single=5, ints=8, negative=3, floats=3.14
+(exec 5
+    (, (num_data $type $x))
+    (O  (pure 
+            (Test MaxAtom $type $result)
+            $result
+            (max-atom (' $x))
+        )
+    )
+)

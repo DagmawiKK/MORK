@@ -1,0 +1,85 @@
+;; Tests for list sorting operations: sort-atom (lexicographical) and sort-math (numerical).
+;; Validates sorting behavior across strings, raw bytes, integers, floats, nested and mixed types.
+
+;; ---------------- DATA SETUP ----------------
+(sort_data bytes (c a d b))
+(sort_data strings ("zebra" "apple" "mango" "banana"))
+(sort_data integers (42 10 5 100 0))
+(sort_data floats (3.14 0.0 -1.5 2.71))
+(sort_data mixed ("10" "2" "100" "02"))
+(sort_data nested (b (c d) (a f) (b)))
+
+;; ---------------- 1. SORT-ATOM (Lexicographical Byte Sort) ----------------
+(exec 1
+    (, (sort_data bytes $x))
+    (O  (pure 
+            (Test SortAtomBytes $result)
+            $result
+            (sort-atom (' $x))
+        )
+    )
+)
+
+(exec 2
+    (, (sort_data strings $x))
+    (O  (pure 
+            (Test SortAtomStrings $result)
+            $result
+            (sort-atom (' $x))
+        )
+    )
+)
+    
+;; Notice how "10" comes before "2" lexicographically
+(exec 3
+    (, (sort_data mixed $x))
+    (O  (pure 
+            (Test SortAtomMixed $result)
+            $result
+            (sort-atom (' $x))
+        )
+    )
+)
+
+;; sort deep nested expressions
+(exec 4
+    (, (sort_data nested $x))
+    (O (pure
+            (Test SortNestedExpr $result)
+            $result
+            (sort-atom (' $x))
+        )
+    )
+)
+
+;; ---------------- 2. SORT-MATH (Numeric Float/Integer Sort) ----------------
+(exec 4
+    (, (sort_data integers $x))
+    (O  (pure 
+            (Test SortMathIntegers $result)
+            $result
+            (sort-math (' $x))
+        )
+    )
+)
+
+(exec 5
+    (, (sort_data floats $x))
+    (O  (pure 
+            (Test SortMathFloats $result)
+            $result
+            (sort-math (' $x))
+        )
+    )
+)
+
+;; Notice how "10" correctly comes after "2" here because it is parsed as a number
+(exec 6
+    (, (sort_data mixed $x))
+    (O  (pure 
+            (Test SortMathMixed $result)
+            $result
+            (sort-math (' $x))
+        )
+    )
+)

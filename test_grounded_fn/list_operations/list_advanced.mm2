@@ -1,0 +1,51 @@
+;; Tests for list operations: last, reverse, and exclude-item.
+;; Includes various edge cases such as empty lists, flat lists, and nested lists.
+
+;; ---------------- DATA SETUP ----------------
+(list_data empty ())
+(list_data single (a))
+(list_data flat (a b c d))
+(list_data nested (a (b c) ((d)) e))
+
+;; Data for exclude-item
+(exclude_data no_match a (x y z))
+(exclude_data match_once b (a b c))
+(exclude_data match_multi x (x y x z x))
+
+;; ---------------- 1. LAST ----------------
+;; Edge cases: empty should fail/skip, single returns the only element
+;; Expected: empty=skip, single=(a), flat=(d), nested=(e)
+(exec 1
+    (, (list_data $type $x))
+    (O  (pure 
+            (Test Last $type $result)
+            $result
+            (last (' $x))
+        )
+    )
+)
+
+;; ---------------- 2. REVERSE ----------------
+;; Expected: empty=(), single=(a), flat=(d c b a), nested=(e ((d)) (b c) a)
+(exec 2
+    (, (list_data $type $x))
+    (O  (pure 
+            (Test Reverse $type $result)
+            $result
+            (reverse (' $x))
+        )
+    )
+)
+
+;; ---------------- 3. EXCLUDE-ITEM ----------------
+;; Expected: no_match=(x y z), match_once=(a c), match_multi=(y z)
+(exec 3
+    (, (exclude_data $type $elem $list))
+    (O  (pure 
+            (Test ExcludeItem $type $result)
+            $result
+            (exclude-item (' $elem) (' $list))
+        )
+    )
+)
+

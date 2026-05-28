@@ -1,0 +1,68 @@
+;; Tests for list set operations: unique-atom, intersection-atom, subtraction-atom, union-atom, and append.
+;; Validates behavior on lists with and without duplicate elements.
+
+;; ---------------- DATA with DUPLICATES ----------------
+(dup_data no_dups (a b c))
+(dup_data with_dups (a b a c d))
+(dup_data all_dups (x x x))
+
+;; ---------------- 1. UNIQUE-ATOM ----------------
+(exec 1
+    (, (dup_data $type $x))
+    (O  (pure 
+            (Test Unique $type $result)
+            $result
+            (unique-atom (' $x))
+        )
+    )
+)
+
+;; ---------------- DATA for BINARY OPS ----------------
+(bin_data list1 (a b c d))
+(bin_data list2 (b d e))
+(bin_data listA (a a b c))
+(bin_data listB (a b b c))
+
+;; ---------------- 2. INTERSECTION-ATOM ----------------
+(exec 2
+    (, (bin_data list1 $a) (bin_data list2 $b))
+    (O  (pure 
+            (Test Intersection $a $b $result)
+            $result
+            (intersection-atom (' $a) (' $b))
+        )
+    )
+)
+
+;; ---------------- 3. SUBTRACTION-ATOM ----------------
+(exec 3
+    (, (bin_data list1 $a) (bin_data list2 $b))
+    (O  (pure 
+            (Test Subtraction $a $b $result)
+            $result
+            (subtraction-atom (' $a) (' $b))
+        )
+    )
+)
+
+;; ---------------- 4. UNION-ATOM ----------------
+(exec 4
+    (, (bin_data list1 $a) (bin_data list2 $b))
+    (O  (pure 
+            (Test Union $a $b $result)
+            $result
+            (union-atom (' $a) (' $b))
+        )
+    )
+)
+
+;; ---------------- 5. APPEND ----------------
+(exec 5
+    (, (bin_data list1 $a) (bin_data list2 $b))
+    (O  (pure 
+            (Test Append $a $b $result)
+            $result
+            (append (' $a) (' $b))
+        )
+    )
+)

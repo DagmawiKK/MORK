@@ -1,0 +1,32 @@
+;; Tests for list folding via foldl and foldl-atom.
+;; Validates the construction of nested structure expressions.
+
+;It's not being evaluated as code; foldl only builds the expression. The result represents the same list (a b c) in cons-cell form:
+;(cons () a)          →  (a)       (prepend `a` to `()`)
+;(cons (cons () a) b) →  (a b)     (prepend `b`)
+;(cons ... c)         →  (a b c)   (prepend `c`)
+
+;; ---------------- FOLDL TEST ----------------
+;; foldl constructs nested (func ...) expressions without evaluating them
+
+(foldl_data items (a b c))
+
+(exec 1
+    (, (foldl_data $type $x))
+    (O  (pure 
+            (Test Foldl $type $result)
+            $result
+            (foldl cons () (' $x))
+        )
+    )
+)
+
+(exec 2
+    (, (foldl_data $type $x))
+    (O  (pure 
+            (Test FoldlAtom $type $result)
+            $result
+            (foldl-atom cons () (' $x))
+        )
+    )
+)
