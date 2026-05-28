@@ -93,6 +93,16 @@ impl EvalScope {
         // take current expr item, and push a new frame to evaluate it.
         match self.expr.read() {
             SourceItem::Tag(Tag::Arity(arity)) => {
+                // Handle empty tuple () before trying to read a function head symbol.
+                // Without this check, arity==0 falls through to the fn_name read below,
+                // which will fail because there are no child bytes to consume — the empty
+                // tuple is just a single Tag::Arity(0) byte with no children.
+                if arity == 0 {
+                    let top_frame = self.stack.last_mut().unwrap();
+                    top_frame.sink.write(SourceItem::Tag(Tag::Arity(0)))?;
+                    return Ok(());
+                }
+
                 let SourceItem::Symbol(fn_name) = self.expr.read() else { return Err(EvalError::from("expected function symbol on the left")) };
                 let func = self.fns.get(fn_name).ok_or_else(|| {
                     trace!(target: "pure", "{:?} not in function registry", std::str::from_utf8(fn_name));
@@ -105,6 +115,11 @@ impl EvalScope {
                     while let CoroutineState::Yielded(i) = std::pin::pin!(&mut src).resume(()) {
                         top_frame.sink.write(i)?;
                     }
+                    // Advance past the quoted expression bytes so the evaluator's position
+                    // is correct for consuming any remaining arguments in the parent frame.
+                    // Without this consume, the position stays at the start of the quoted
+                    // expression, causing downstream reads to desync.
+                    self.expr.consume::<mork_expr::Expr>()?;
                 } else {
                     let mut frame = StackFrame {
                         // yes this is just get_alloc but Rust is stupid
