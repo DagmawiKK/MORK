@@ -7,6 +7,7 @@ use pathmap::zipper::*;
 use mork_expr::{byte_item, destruct, item_byte, serialize, Expr, Tag};
 use mork_expr::macros::SerializableExpr;
 use weighted_atom_sweep::AtomHeader;
+use crate::weightedsweep::{next_atom, GLOBAL_WS_SWEEP};
 
 pub(crate) enum ResourceRequest {
     BTM(&'static [u8]),
@@ -182,7 +183,84 @@ where
 }
 
 
-pub enum ASource<H> where H: AtomHeader + Default { PosSource(BTMSource), /* ACTSource(ACTSource), */ CmpSource(CmpSource), CompatSource(CompatSource), _Marker(PhantomData<H>) }
+const WS_SELECT_NAME: &[u8] = b"ws-select";
+// 1 byte (arity) + 1 byte (sym-size) + 9 bytes ("ws-select") = 11
+const WS_SELECT_SKIP: usize = 1 + 1 + WS_SELECT_NAME.len();
+
+// Byte prefix that ProductZipperG paths must start with so unification against
+// (ws-select INNER_PATTERN) succeeds in query_multi_raw.
+static WS_SELECT_PREFIX: [u8; 11] = [
+    item_byte(Tag::Arity(2)),
+    item_byte(Tag::SymbolSize(9)),
+    b'w', b's', b'-', b's', b'e', b'l', b'e', b'c', b't',
+];
+
+struct WsSelectSource {
+    e: Expr,
+}
+
+impl<H> Source<H> for WsSelectSource
+where
+    H: AtomHeader + Default + Clone + Send + Sync + Unpin + 'static,
+{
+    fn new(e: Expr) -> Self {
+        WsSelectSource { e }
+    }
+
+    fn request(&self) -> impl Iterator<Item = ResourceRequest> {
+        std::iter::empty()
+    }
+
+    fn source<'trie, 'path, It: Iterator<Item = Resource<'trie, 'path, H>>>(
+        &self,
+        _it: It,
+    ) -> AFactor<'trie, H>
+    where
+        'path: 'trie,
+    {
+        let inner_pat = unsafe { Expr { ptr: self.e.ptr.add(WS_SELECT_SKIP) } };
+        let prefix_bytes: Vec<u8> = unsafe {
+            let prefix_ptr = inner_pat.prefix().unwrap_or_else(|full| full);
+            prefix_ptr.as_ref().map(|s| s.to_vec()).unwrap_or_default()
+        };
+        trace!(target: "source", "WsSelectSource prefix_bytes='{}' len={}", serialize(&prefix_bytes), prefix_bytes.len());
+
+        let selected_path: Vec<u8> = {
+            let guard = GLOBAL_WS_SWEEP.lock().unwrap();
+            if let Some(sweep) = guard.as_ref() {
+                match sweep.map.inner.read_zipper_at_borrowed_path(&prefix_bytes) {
+                    Ok(rz) => {
+                        let result = next_atom(rz).unwrap_or_default();
+                        trace!(target: "source", "WsSelectSource selected_path='{}' len={}", serialize(&result), result.len());
+                        result
+                    },
+                    Err(_) => {
+                        trace!(target: "source", "WsSelectSource read_zipper_at_borrowed_path FAILED");
+                        vec![]
+                    },
+                }
+            } else {
+                trace!(target: "source", "WsSelectSource GLOBAL_WS_SWEEP is None");
+                vec![]
+            }
+        };
+
+        // Prepend WS_SELECT_PREFIX so query_multi_raw can unify
+        // (ws-select INNER_PATTERN) against this path correctly.
+        let mut full_path = Vec::with_capacity(WS_SELECT_PREFIX.len() + selected_path.len());
+        full_path.extend_from_slice(&WS_SELECT_PREFIX);
+        full_path.extend_from_slice(&selected_path);
+
+        let single = if selected_path.is_empty() {
+            PathMap::<H>::new()
+        } else {
+            PathMap::<H>::single(&full_path, H::default())
+        };
+        AFactor::WsSelectSource(single.into_read_zipper(&[]))
+    }
+}
+
+pub enum ASource<H> where H: AtomHeader + Default { PosSource(BTMSource), /* ACTSource(ACTSource), */ CmpSource(CmpSource), CompatSource(CompatSource), WsSelectSource(WsSelectSource), _Marker(PhantomData<H>) }
 
 #[derive(PolyZipper)]
 pub enum AFactor<'trie, V: Clone + Send + Sync + Unpin + 'static + AtomHeader + Default > {
@@ -191,6 +269,7 @@ pub enum AFactor<'trie, V: Clone + Send + Sync + Unpin + 'static + AtomHeader + 
     // ACTSource(PrefixZipper<'trie, ACTMmapZipper<'trie, V>>),
     CmpSource(PrefixZipper<'trie, DependentProductZipperG<'trie, ReadZipperUntracked<'trie, 'trie, V>,
         ReadZipperOwned<V>, V, (usize, PathMap<V>), for<'a> fn((usize, PathMap<V>), &'a [u8], usize) -> ((usize, PathMap<V>), Option<ReadZipperOwned<V>>)>>),
+    WsSelectSource(ReadZipperOwned<V>),
 }
 
 impl<H> ASource<H>
@@ -202,9 +281,9 @@ where
     }
 }
 
-impl<H> Source<H> for ASource<H> 
+impl<H> Source<H> for ASource<H>
 where
-    H: AtomHeader + Default
+    H: AtomHeader + Default + Clone + Send + Sync + Unpin + 'static,
 {
     fn new(e: Expr) -> Self {
         if unsafe { *e.ptr == item_byte(Tag::Arity(2)) && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(3)) && *e.ptr.offset(2) == b'B' && *e.ptr.offset(3) == b'T' && *e.ptr.offset(4) == b'M' } {
@@ -213,22 +292,39 @@ where
         //     ASource::ACTSource(ACTSource::new(e))
         } else if unsafe { *e.ptr == item_byte(Tag::Arity(3)) && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(2)) && (*e.ptr.offset(2) == b'=' || *e.ptr.offset(2) == b'!') && *e.ptr.offset(3) == b'=' } {
             ASource::CmpSource(<CmpSource as Source<H>>::new(e))
+        } else if unsafe {
+            *e.ptr == item_byte(Tag::Arity(2))
+                && *e.ptr.offset(1) == item_byte(Tag::SymbolSize(9))
+                && *e.ptr.offset(2) == b'w'
+                && *e.ptr.offset(3) == b's'
+                && *e.ptr.offset(4) == b'-'
+                && *e.ptr.offset(5) == b's'
+                && *e.ptr.offset(6) == b'e'
+                && *e.ptr.offset(7) == b'l'
+                && *e.ptr.offset(8) == b'e'
+                && *e.ptr.offset(9) == b'c'
+                && *e.ptr.offset(10) == b't'
+        } {
+            ASource::WsSelectSource(<WsSelectSource as Source<H>>::new(e))
         } else {
-            unreachable!()
+            ASource::CompatSource(<CompatSource as Source<H>>::new(e))
         }
     }
 
     fn request(&self) -> impl Iterator<Item=ResourceRequest> {
         gen move {
             match self {
-                ASource::PosSource(s) => { 
-                    for i in <BTMSource as Source<H>>::request(s).into_iter() { yield i } 
+                ASource::PosSource(s) => {
+                    for i in <BTMSource as Source<H>>::request(s).into_iter() { yield i }
                 }
-                ASource::CmpSource(s) => { 
-                    for i in <CmpSource as Source<H>>::request(s).into_iter() { yield i } 
+                ASource::CmpSource(s) => {
+                    for i in <CmpSource as Source<H>>::request(s).into_iter() { yield i }
                 }
-                ASource::CompatSource(s) => { 
-                    for i in <CompatSource as Source<H>>::request(s).into_iter() { yield i } 
+                ASource::CompatSource(s) => {
+                    for i in <CompatSource as Source<H>>::request(s).into_iter() { yield i }
+                }
+                ASource::WsSelectSource(s) => {
+                    for i in <WsSelectSource as Source<H>>::request(s).into_iter() { yield i }
                 }
                 ASource::_Marker(_) => unreachable!()
             }
@@ -241,6 +337,7 @@ where
             // ASource::ACTSource(s) => { s.source(it) }
             ASource::CmpSource(s) => { s.source(it) }
             ASource::CompatSource(s) => { s.source(it) }
+            ASource::WsSelectSource(s) => { s.source(it) }
             ASource::_Marker(_) => unreachable!(),
         }
     }
