@@ -546,14 +546,19 @@ where
         wz.reset();
         let mut rz = self.remove.read_zipper();
         let mut changed = false;
+        let mut count = 0;
         while rz.to_next_val() {
             let mpath = rz.path();
             wz.descend_to(mpath);
             if wz.is_val() {
                 wz.remove_val(true);
                 changed = true;
+                count += 1;
             }
             wz.ascend(mpath.len());
+        }
+        if count > 0 {
+            eprintln!("RemoveSink: removed {} Val atoms", count);
         }
         changed
     }
