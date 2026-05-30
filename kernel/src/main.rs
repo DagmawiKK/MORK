@@ -4545,7 +4545,7 @@ fn bench_mln_gibbs() {
     *GLOBAL_WS_SWEEP.lock().unwrap() = Some(sweep_for_global);
 
     // Run metta_calculus with bounded steps
-    let steps = s.metta_calculus(64);
+    let steps = s.metta_calculus(512);
     println!(
         "metta_calculus: {steps} steps, {} atoms in Space",
         s.btm.val_count()
