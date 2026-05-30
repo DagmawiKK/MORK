@@ -4598,6 +4598,115 @@ fn bench_mln_gibbs() {
     println!("\nbench_mln_gibbs completed successfully");
 }
 
+fn bench_mln_gibbs_updated() {
+    use mork::weightedsweep::*;
+    use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, ZipperCreation, ZipperIteration, ZipperValues};
+    use std::io::Read;
+    use std::sync::Arc;
+    use weighted_atom_sweep::{
+        AtomHeader, AtomPosition, Operation, OperationObserver, TraversalEngine, TraversalError,
+        WeightedAtomSweep, WeightedAtomSweepSettings,
+    };
+
+    // Load MLN Gibbs updated MM2 resource
+    let path = "kernel/resources/mln_gibbs_updated.mm2";
+    let mut contents = String::new();
+    std::fs::File::open(path)
+        .expect("cannot open mln_gibbs_updated.mm2")
+        .read_to_string(&mut contents)
+        .unwrap();
+
+    let mut s: Space<U64AtomHeader> = Space::new();
+    s.add_all_sexpr(contents.as_bytes()).unwrap();
+    println!("Loaded mln_gibbs_updated.mm2 ({} atoms)", s.btm.val_count());
+
+    // Count exec atoms before metta_calculus
+    let exec_prefix: [u8; 6] = const { [item_byte(Tag::Arity(4)), item_byte(Tag::SymbolSize(4)), b'e', b'x', b'e', b'c'] };
+    {
+        let mut rz = s.btm.read_zipper_at_borrowed_path(&exec_prefix[..]);
+        let mut exec_count = 0;
+        while rz.to_next_val() {
+            exec_count += 1;
+        }
+        println!("exec atoms before metta_calculus: {exec_count}");
+    }
+
+    // Initialize GLOBAL_WS_SWEEP so the ws sink writes to it
+    let sweep_for_global =
+        WeightedAtomSweep::<U64AtomHeader>::new(WeightedAtomSweepSettings::default());
+    *GLOBAL_WS_SWEEP.lock().unwrap() = Some(sweep_for_global);
+
+    // Dump sweep map before metta_calculus
+    {
+        let guard = GLOBAL_WS_SWEEP.lock().unwrap();
+        if let Some(sweep) = guard.as_ref() {
+            let mut rz = sweep.map.inner.read_zipper_at_borrowed_path(&[]).unwrap();
+            println!("=== Sweep map BEFORE metta_calculus (via bench) ===");
+            let mut count = 0;
+            while rz.to_next_val() {
+                let path = rz.origin_path().to_vec();
+                println!("  [{}] path='{}' val={:?}", count, String::from_utf8_lossy(&path), rz.val());
+                count += 1;
+            }
+            println!("  ({} atoms total)", count);
+        }
+        drop(guard);
+    }
+
+    // Run metta_calculus with bounded steps
+    let steps = s.metta_calculus(512);
+    println!(
+        "metta_calculus: {steps} steps, {} atoms in Space",
+        s.btm.val_count()
+    );
+
+    // Count exec atoms after metta_calculus
+    {
+        let mut rz = s.btm.read_zipper_at_borrowed_path(&exec_prefix[..]);
+        let mut exec_count = 0;
+        while rz.to_next_val() {
+            exec_count += 1;
+        }
+        println!("exec atoms after metta_calculus: {exec_count}");
+    }
+
+    // Extract sweep from global
+    let mut guard = GLOBAL_WS_SWEEP.lock().unwrap();
+    let sweep = guard.take().expect("no sweep in global");
+    drop(guard);
+
+    // Dump Space atoms via dump_all_sexpr
+    {
+        let mut buf = vec![];
+        s.dump_all_sexpr(&mut buf).unwrap();
+        let text = String::from_utf8_lossy(&buf);
+        println!("\n=== Space dump ===");
+        println!("{}", text);
+    }
+
+    // Dump Sweep map atom count and sample headers
+    {
+        let map_arc = sweep.map.inner.clone();
+        let mut rz = map_arc.read_zipper_at_borrowed_path(&[]).unwrap();
+        let mut count = 0;
+        let mut sum_headers = 0i64;
+        println!("\n=== Sweep map atoms ===");
+        while rz.to_next_val() {
+            if let Some(hdr) = rz.val() {
+                let h = hdr.0;
+                let weight = (h - (h & 1)) / 2;
+                let value = h & 1;
+                sum_headers += h as i64;
+                println!("  [{}] header={}, weight={}, value={}", count, h, weight, value);
+            }
+            count += 1;
+        }
+        println!("Sweep map: {count} atoms, sum_of_headers={sum_headers}");
+    }
+
+    println!("\nbench_mln_gibbs_updated completed successfully");
+}
+
 fn bench_random() {
     use mork::weightedsweep::*;
     use pathmap::zipper::{ReadZipperTracked, WriteZipperTracked, ZipperIteration, ZipperValues};
@@ -6906,6 +7015,7 @@ fn main() {
                     "chunked_pq" => bench_cpq(),
                     "mln_flip" => bench_mln_flip(),
                     "mln_gibbs" => bench_mln_gibbs(),
+                    "mln_gibbs_updated" => bench_mln_gibbs_updated(),
                     "tile_puzzle_states" => bench_tile_puzzle_states(),
                     s => {
                         println!("bench not known: {s}")
