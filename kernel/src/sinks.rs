@@ -1738,6 +1738,8 @@ pub struct WsSink {
     e: Expr,
     skip: usize,
     delta: u64,
+    dynamic: bool,
+    scope: Option<EvalScope>,
 }
 impl<H> Sink<H> for WsSink
 where
@@ -1747,18 +1749,31 @@ where
         let mut ez = ExprZipper::new(e);
         ez.next();
         ez.next();
-        let max_s = ez
-            .item()
-            .err()
-            .expect("cnt can not be an expression or variable");
-        let delta: u64 = str::from_utf8(max_s)
-            .expect("string encoded numbers for now")
-            .parse()
-            .expect("a number");
-        WsSink {
-            e,
-            skip: 1 + 1 + 2 + 1 + max_s.len(),
-            delta,
+        match ez.item() {
+            Err(max_s) => {
+                let delta: u64 = str::from_utf8(max_s)
+                    .expect("string encoded numbers for now")
+                    .parse()
+                    .expect("a number");
+                trace!(target: "sink", "WsSink::new OLD format delta={}", delta);
+                WsSink {
+                    e,
+                    skip: 1 + 1 + 2 + 1 + max_s.len(),
+                    delta,
+                    dynamic: false,
+                    scope: None,
+                }
+            }
+            Ok(_) => {
+                trace!(target: "sink", "WsSink::new DYNAMIC format");
+                WsSink {
+                    e,
+                    skip: 0,
+                    delta: 0,
+                    dynamic: true,
+                    scope: None,
+                }
+            }
         }
     }
 
@@ -1795,22 +1810,62 @@ where
         'a: 'w,
         'k: 'w,
     {
-        let current_thread = std::thread::current().id();
         trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(path), serialize(path));
-        // if let Some(wsweep) = GLOBAL_WS_SWEEP.get() {
         let mut guard = GLOBAL_WS_SWEEP.lock().unwrap();
         if let Some(wsweep) = guard.as_mut() {
-            let WriteResource::BTM(wz) = it.next().unwrap() else {
-                unreachable!()
-            };
-            let mpath = &path[self.skip..];
-            let wmap = &wsweep.map;
-            trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
-            trace!(target: "sink", "ws sinking '{}'", serialize(mpath));
-            let curr = wmap.get_val(mpath).unwrap_or(U64AtomHeader::default()).0;
-            let _ = &wmap.set_weighted_val(mpath, U64AtomHeader((curr as u64 + self.delta) as i32));
+            if self.dynamic {
+                // New format: (ws (W ...) <expr>)
+                // Substituted buffer = [Arity(3)] [SymSize(2)] [w] [s]
+                //                       [(W ...) encoded] [<expr> bytes]
+                // Skip Arity(3) + SymSize(2) + "ws" = 4 bytes to reach (W ...)
+                let target_start = 4;
+                let target_expr = unsafe {
+                    Expr {
+                        ptr: path.as_ptr().add(target_start).cast_mut(),
+                    }
+                };
+                let target_len = unsafe { target_expr.span().len() };
+                let target_path = &path[target_start..target_start + target_len];
 
-            trace!(target: "sink", "ws finalizing {:?}", wmap.get_val(mpath).unwrap_or(U64AtomHeader::default()).0);
+                let expr_start = target_start + target_len;
+                let expr_bytes = &path[expr_start..];
+                let scope = self.scope.get_or_insert_with(|| {
+                    let mut s = EvalScope::new();
+                    pure::register(&mut s);
+                    s
+                });
+                let result = scope
+                    .eval(ExprSource::new(expr_bytes.as_ptr()))
+                    .expect("ws expression evaluation failed");
+
+                let weight = if result.len() >= 9 {
+                    let f64_bytes: [u8; 8] = result[1..9].try_into().unwrap();
+                    f64::from_be_bytes(f64_bytes) as i32
+                } else {
+                    0
+                };
+
+                let wmap = &wsweep.map;
+                trace!(target: "sink", "ws dynamic set '{}' = {}", serialize(target_path), weight);
+                let _ = &wmap.set_weighted_val(target_path, U64AtomHeader(weight));
+                scope.return_alloc(result);
+            } else {
+                // Old format: (ws <delta> (W ...))
+                let WriteResource::BTM(wz) = it.next().unwrap() else {
+                    unreachable!()
+                };
+                let mpath = &path[self.skip..];
+                let wmap = &wsweep.map;
+                trace!(target: "sink", "ws at '{}' sinking raw '{}'", serialize(wz.root_prefix_path()), serialize(path));
+                trace!(target: "sink", "ws sinking '{}'", serialize(mpath));
+                let curr = wmap.get_val(mpath).unwrap_or(U64AtomHeader::default()).0;
+                let new_hdr = U64AtomHeader((curr as u64 + self.delta) as i32);
+                let result = wmap.set_weighted_val(mpath, new_hdr);
+                trace!(target: "sink", "ws old set '{}' curr={} delta={} new={:?} result={:?}",
+                    serialize(mpath), curr, self.delta, new_hdr, result);
+
+                trace!(target: "sink", "ws after-set get_val {:?}", wmap.get_val(mpath));
+            }
         } else {
             trace!(target: "sink", "WSwp missing!");
         };
