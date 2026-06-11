@@ -205,6 +205,18 @@ fn coreferential_transition<Z : ZipperMoving + Zipper + ZipperAbsolutePath + Zip
                         loc.ascend_byte();
                     }
                 }
+                Tag::LongArity => {
+                    let a = unsafe { mork_expr::read_arity_at(e.base.ptr.byte_add(e.offset as usize)) };
+                    vs!(e, false);
+                    if loc.descend_to_existing_byte(e_byte) {
+                        let stackl = stack.len();
+                        e.args(&mut stack);
+                        stack[stackl..].reverse();
+                        coreferential_transition(loc, stack, references, f);
+                        stack.truncate(stack.len() - a as usize);
+                        loc.ascend_byte();
+                    }
+                }
             }
 
             stack.push(e);

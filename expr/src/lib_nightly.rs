@@ -13,7 +13,7 @@ pub enum SourceItem<'a> {
 
 pub fn item_sink<W: std::io::Write>(target: &mut W) -> impl Coroutine<SourceItem, Yield=(), Return=std::io::Result<usize>> {
     #[coroutine] move |mut i: SourceItem| {
-        let mut stack: smallvec::SmallVec<[u8; 64]> = smallvec::SmallVec::new();
+        let mut stack: smallvec::SmallVec<[u64; 64]> = smallvec::SmallVec::new();
         let mut j = 0;
         loop {
             match i {
@@ -31,10 +31,11 @@ pub fn item_sink<W: std::io::Write>(target: &mut W) -> impl Coroutine<SourceItem
                         Tag::Arity(a) => {
                             target.write_all(&[item_byte(tag)])?;
                             j += 1;
-                            stack.push(a);
+                            stack.push(a as u64);
                             i = yield ();
                             continue;
                         }
+                        Tag::LongArity => { panic!("item_sink should not receive LongArity; item_source converts to Arity(u8)") }
                     }
                 }
                 SourceItem::Symbol(slice) => {
@@ -69,7 +70,7 @@ pub fn item_sink<W: std::io::Write>(target: &mut W) -> impl Coroutine<SourceItem
 
 pub fn item_source<'a>(e: Expr) -> impl Coroutine<(), Yield=SourceItem<'a>, Return=usize> {
     #[coroutine] move || {
-        let mut stack: smallvec::SmallVec<[u8; 64]> = smallvec::SmallVec::new();
+        let mut stack: smallvec::SmallVec<[u64; 64]> = smallvec::SmallVec::new();
         let mut j: usize = 0;
         'putting: loop {
             match unsafe { byte_item(*e.ptr.byte_add(j)) } {
@@ -83,6 +84,13 @@ pub fn item_source<'a>(e: Expr) -> impl Coroutine<(), Yield=SourceItem<'a>, Retu
                 Tag::Arity(a) => {
                     yield SourceItem::Tag(Tag::Arity(a));
                     j += 1;
+                    stack.push(a as u64);
+                    continue 'putting;
+                }
+                Tag::LongArity => {
+                    let a = crate::read_arity_at(unsafe { e.ptr.byte_add(j) });
+                    yield SourceItem::Tag(Tag::Arity(a as u8));
+                    j += 2;
                     stack.push(a);
                     continue 'putting;
                 }
@@ -194,6 +202,7 @@ pub fn apply_e<'o, OS : Coroutine<SourceItem<'o>, Yield=(), Return=std::io::Resu
                 if PRINT_DEBUG { println!("{}@ [{}]", "  ".repeat(depth), a); }
                 es.as_mut().resume(SourceItem::Tag(Tag::Arity(a)));
             }
+            CoroutineState::Yielded(SourceItem::Tag(Tag::LongArity)) => { unreachable!("item_source converts LongArity to Arity(u8)") }
             CoroutineState::Yielded(SourceItem::Symbol(s)) => {
                 if PRINT_DEBUG { println!("{}@ \"{}\"", "  ".repeat(depth), unsafe { std::str::from_utf8_unchecked(s) }); }
                 es.as_mut().resume(SourceItem::Symbol(s));

@@ -1,4 +1,4 @@
-use mork_expr::{ExprZipper, Tag, item_byte, byte_item};
+use mork_expr::{ExprZipper, Tag, item_byte, byte_item, read_arity_at};
 
 #[allow(non_snake_case)]
 fn isWhitespace(c: u8) -> bool {
@@ -104,7 +104,7 @@ pub trait Parser {
         }
         b'(' => {
           let arity_loc = target.loc;
-          target.write_arity(0);
+          unsafe { *target.root.ptr.byte_add(target.loc) = 0b0000_0000; }
           target.loc += 1;
           it.next()?;
           while it.peek()? != b')' {
@@ -114,8 +114,31 @@ pub trait Parser {
                 self.sexpr(it, target)?;
                 unsafe {
                   let p = target.root.ptr.byte_add(arity_loc);
-                  if let Tag::Arity(a) = byte_item(*p) { *p = item_byte(Tag::Arity(a + 1)); }
-                  else { return Err(NotArity) }
+                  match byte_item(*p) {
+                    Tag::Arity(a) => {
+                      if a < 63 {
+                        *p = item_byte(Tag::Arity(a + 1));
+                      } else {
+                        // Expand to 2-byte LongArity: shift subsequent bytes right by 1
+                        let end = target.loc;
+                        let src = target.root.ptr.byte_add(arity_loc + 1);
+                        let dst = target.root.ptr.byte_add(arity_loc + 2);
+                        let count = end - (arity_loc + 1);
+                        std::ptr::copy(src, dst, count);
+                        // Write arity 64 as 2-byte LongArity
+                        *p = 0b0100_0000 | 0; // low 6 bits: 64 & 0x3F = 0
+                        *target.root.ptr.byte_add(arity_loc + 1) = 1;   // (64 >> 6) = 1
+                        target.loc += 1;
+                      }
+                    }
+                    Tag::LongArity => {
+                      let a = read_arity_at(p);
+                      let new_a = a + 1;
+                      *p = 0b0100_0000 | (new_a as u8 & 0b0011_1111);
+                      *target.root.ptr.byte_add(arity_loc + 1) = (new_a >> 6) as u8;
+                    }
+                    _ => return Err(NotArity),
+                  }
                 }
               }
             }
