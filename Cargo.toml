@@ -5,6 +5,7 @@ members = [
     "expr/",
     "frontend/",
     "kernel/",
+    "metta/",
     "experiments/eval",
     "experiments/eval-ffi",
     "experiments/eval-examples",
@@ -22,9 +23,11 @@ eval-ffi = {path = "experiments/eval-ffi"}
 mork-interning = {features = ["debug_api"], path = "./interning"}
 mork-expr = {path = "./expr"}
 mork-frontend = {path = "./frontend"}
+mork-metta = { path = "./metta" }
 mork = {path = "./kernel"}
 
 # External to MORK
+pyo3 = "0.23"
 gxhash = {version="3.4.1", git="https://github.com/luketpeterson/gxhash/"} # for dag_serialization
 log = { version = "0.4.27" }
 env_logger = "0.11.8"
