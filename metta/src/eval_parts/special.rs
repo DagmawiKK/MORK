@@ -438,9 +438,28 @@ pub(crate) fn eval_eval(args: &[Expr], env: &Env, funcs: &FnTable) -> Result<NDe
             let expr = crate::parser::atom_to_expr(&val)?;
             super::core::eval(&expr, env, funcs)
         }
-        // Literal expression: pass directly to eval — no pre-evaluation.
-        _ => super::core::eval(&args[0], env, funcs),
+        // Literal expression: substitute $variables, then evaluate.
+        _ => {
+            let expr = subst_expr_vars(&args[0], env);
+            super::core::eval(&expr, env, funcs)
+        }
     }
+}
+
+/// Evaluate `(lambda params body)` — return as an unevaluated data structure.
+///
+/// Unlike `|->` which creates a callable closure, `lambda` is treated as a
+/// data constructor: both params and body are converted to atoms WITHOUT
+/// evaluation, preserving them for pattern matching or later eval.
+pub(crate) fn eval_lambda_form(args: &[Expr], _env: &Env) -> Result<NDet, String> {
+    if args.len() != 2 {
+        return Err(format!(
+            "lambda: expected (params body), got {} args", args.len()
+        ));
+    }
+    let params = crate::parser::expr_to_atom(&args[0]);
+    let body = crate::parser::expr_to_atom(&args[1]);
+    Ok(NDet::single(Atom::Expr(vec![Atom::sym("lambda"), params, body])))
 }
 
 // ========================================================================
