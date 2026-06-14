@@ -4,6 +4,7 @@
 /// macro-registered — one line per function.
 
 use crate::atom::Atom;
+use crate::env::Env;
 use crate::func::{Clause, FnTable, FunctionKind, NDet};
 use crate::parser::Expr;
 
@@ -808,24 +809,38 @@ pub fn register_builtins(table: &FnTable) {
             Atom::Expr(v) => v.clone(),
             other => vec![other.clone()],
         };
-        let fname = match &args[0] {
-            Atom::Sym(s) => s.clone(),
-            _ => return Err("maplist: first arg must be a symbol (function name)".into()),
-        };
         let mut results = Vec::with_capacity(items.len());
-        for item in &items {
-            let func_ref = table.get(&fname, 1)
-                .ok_or_else(|| format!("maplist: function {} with arity 1 not found", fname))?;
-            let func_ptr = match &func_ref.kind {
-                FunctionKind::Native { func } => func.clone(),
-                FunctionKind::UserDefined { .. } => {
-                    return Err("maplist: only native functions supported as first argument".into());
+        match &args[0] {
+            Atom::Sym(fname) => {
+                let fname = fname.clone();
+                for item in &items {
+                    let func_ref = table.get(&fname, 1)
+                        .ok_or_else(|| format!("maplist: function {} with arity 1 not found", fname))?;
+                    let func_ptr = match &func_ref.kind {
+                        FunctionKind::Native { func } => func.clone(),
+                        FunctionKind::UserDefined { .. } => {
+                            return Err("maplist: only native functions supported as first argument".into());
+                        }
+                    };
+                    drop(func_ref);
+                    let mut result = func_ptr(&[item.clone()], table)?;
+                    let val = result.next().ok_or_else(|| format!("maplist: function produced no results for item {}", item.to_sexpr_string()))?;
+                    results.push(val);
                 }
-            };
-            drop(func_ref);
-            let mut result = func_ptr(&[item.clone()], table)?;
-            let val = result.next().ok_or_else(|| format!("maplist: function produced no results for item {}", item.to_sexpr_string()))?;
-            results.push(val);
+            }
+            Atom::Closure(data) => {
+                for item in &items {
+                    let item_expr = crate::parser::atom_to_expr(item)
+                        .map_err(|e| format!("maplist: {}", e))?;
+                    let mut stream = crate::eval_parts::core::apply_closure(
+                        &data.params, &data.body, &data.env,
+                        &[item_expr], &Env::new(), table,
+                    )?;
+                    let val = stream.next().ok_or_else(|| format!("maplist: closure produced no results for item {}", item.to_sexpr_string()))?;
+                    results.push(val);
+                }
+            }
+            _ => return Err("maplist: first arg must be a symbol (function name) or closure".into()),
         }
         Ok(NDet::single(Atom::Expr(results)))
     });

@@ -900,3 +900,141 @@ fn test_foldl_atom_list_init_func() {
     let result = rt.eval_str(code).unwrap();
     assert_eq!(result, Some(Atom::sym("true")));
 }
+
+// ========================================================================
+// lambda special form (data constructor, not closure)
+// ========================================================================
+
+#[test]
+fn test_lambda_form_basic_apply() {
+    // (apply (lambda $x (+ $x 1)) 2) -> 3
+    let mut rt = Runtime::new();
+    let code = r#"
+(= (apply (lambda $var $body) $arg)
+   (eval (let $var $arg $body)))
+!(test (apply (lambda $x (+ $x 1)) 2) 3)
+"#;
+    let result = rt.eval_str(code).unwrap();
+    assert_eq!(result, Some(Atom::sym("true")));
+}
+
+#[test]
+fn test_lambda_form_multi_params() {
+    // (apply (lambda ($x $y) (+ $x $y)) (2 7)) -> 9
+    let mut rt = Runtime::new();
+    let code = r#"
+(= (apply (lambda $var $body) $arg)
+   (eval (let $var $arg $body)))
+(= (apply (lambda ($var1 $var2) $body) ($arg1 $arg2))
+   (eval (let ($var1 $var2) ($arg1 $arg2) $body)))
+!(test (apply (lambda ($x $y) (+ $x $y)) (2 7)) 9)
+"#;
+    let result = rt.eval_str(code).unwrap();
+    assert_eq!(result, Some(Atom::sym("true")));
+}
+
+#[test]
+fn test_lambda_form_as_data() {
+    // lambda should NOT evaluate its body — (lambda $x (+ $x 1)) is data
+    let mut rt = Runtime::new();
+    let code = r#"
+!(test (repr (lambda $x (+ $x 1))) "(lambda $x (+ $x 1))")
+"#;
+    let result = rt.eval_str(code).unwrap();
+    assert_eq!(result, Some(Atom::sym("true")));
+}
+
+#[test]
+fn test_lambda_form_zero_params() {
+    // (lambda () body) with empty param list
+    let mut rt = Runtime::new();
+    let code = r#"
+(= (apply (lambda $var $body) $arg)
+   (eval (let $var $arg $body)))
+(= (thunk) (apply (lambda () 42) ()))
+!(test (thunk) 42)
+"#;
+    let result = rt.eval_str(code).unwrap();
+    assert_eq!(result, Some(Atom::sym("true")));
+}
+
+#[test]
+fn test_lambda_form_literal_body() {
+    // lambda body with no variables — literal value
+    let mut rt = Runtime::new();
+    let code = r#"
+(= (apply (lambda $var $body) $arg)
+   (eval (let $var $arg $body)))
+!(test (apply (lambda $x 42) 99) 42)
+"#;
+    let result = rt.eval_str(code).unwrap();
+    assert_eq!(result, Some(Atom::sym("true")));
+}
+
+#[test]
+fn test_lambda_form_let_bound() {
+    // lambda bound to a variable and used with apply
+    let mut rt = Runtime::new();
+    let code = r#"
+(= (apply (lambda $var $body) $arg)
+   (eval (let $var $arg $body)))
+!(let $f (lambda $x (+ $x 1))
+   (test (apply $f 10) 11))
+"#;
+    let result = rt.eval_str(code).unwrap();
+    assert_eq!(result, Some(Atom::sym("true")));
+}
+
+#[test]
+fn test_lambda_form_wrong_args() {
+    // lambda expects exactly (params body) — error otherwise
+    let mut rt = Runtime::new();
+    let result = rt.eval_str("!(lambda $x)");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("lambda"));
+}
+
+#[test]
+fn test_lambda_form_nested_body() {
+    // lambda with a nested expression in the body
+    let mut rt = Runtime::new();
+    let code = r#"
+(= (apply (lambda $var $body) $arg)
+   (eval (let $var $arg $body)))
+!(test (apply (lambda $x (* $x (+ $x 1))) 5) 30)
+"#;
+    let result = rt.eval_str(code).unwrap();
+    assert_eq!(result, Some(Atom::sym("true")));
+}
+
+#[test]
+fn test_lambda_form_in_case() {
+    // lambda data structure matched in case
+    let mut rt = Runtime::new();
+    let code = r#"
+(= (describe (lambda $params $body)) (quote lambda-form))
+(= (describe $else) (quote other))
+!(test (describe (lambda $x $x)) lambda-form)
+!(test (describe 42) other)
+"#;
+    let result = rt.eval_str(code).unwrap();
+    assert_eq!(result, Some(Atom::sym("true")));
+}
+
+#[test]
+fn test_lambda_form_does_not_eval_body() {
+    // Ensures (lambda $x (+ $x 1)) does NOT evaluate (+ $x 1) at construction.
+    // If it did, unbound $x would cause + to error. We pattern-match the lambda
+    // data via case to verify the body is captured as the raw expression.
+    let mut rt = Runtime::new();
+    let code = r#"
+(= (apply (lambda $var $body) $arg)
+   (eval (let $var $arg $body)))
+(= (capture-body (lambda $p $b)) $b)
+!(let $body (capture-body (lambda $x (+ $x 1)))
+   (let $result (eval (let $x 5 $body))
+      (test $result 6)))
+"#;
+    let result = rt.eval_str(code).unwrap();
+    assert_eq!(result, Some(Atom::sym("true")));
+}

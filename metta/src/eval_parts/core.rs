@@ -36,8 +36,9 @@ use crate::eval_parts::python::eval_py_call;
 use crate::eval_parts::space_ops::{eval_add_atom, eval_match, eval_remove_atom};
 use crate::eval_parts::special::{
     eval_call, eval_case, eval_chain, eval_collapse, eval_foldall, eval_forall,
-    eval_if, eval_implication, eval_lambda, eval_let, eval_let_star, eval_map_atom,
-    eval_progn, eval_query, eval_quote, eval_repr, eval_superpose, eval_within, eval_eval,
+    eval_if, eval_implication, eval_lambda, eval_lambda_form, eval_let, eval_let_star,
+    eval_map_atom, eval_progn, eval_query, eval_quote, eval_repr, eval_superpose,
+    eval_within, eval_eval,
 };
 use crate::func::{FnTable, Function, FunctionKind, NDet};
 use crate::parser::Expr;
@@ -103,6 +104,7 @@ pub fn eval(expr: &Expr, env: &Env, funcs: &FnTable) -> Result<NDet, String> {
                     "foldall" => { trace!("→ special: foldall"); return eval_foldall(args, env, funcs); }
                     "map-atom" => { trace!("→ special: map-atom"); return eval_map_atom(args, env, funcs); }
                     "|->" => { trace!("→ special: lambda"); return eval_lambda(args, env); }
+                    "lambda" => { trace!("→ special: lambda-form"); return eval_lambda_form(args, env); }
                     "forall" => { trace!("→ special: forall"); return eval_forall(args, env, funcs); }
                     "repr" => { trace!("→ special: repr"); return eval_repr(args, env); }
                     "within" => { trace!("→ special: within"); return eval_within(args, env, funcs); }
@@ -180,6 +182,10 @@ fn try_call_or_data(
                 return match funcs.get(s, args.len() as u8) {
                     Some(func) => call_with_cloned(&*func, s, args, env, funcs),
                     None => {
+                        // Fewer args than the function's arity → curry it.
+                        if let Some(result) = try_partial_application(s, args, env, funcs) {
+                            return result;
+                        }
                         trace!("→ unknown symbol '{}', treating as data list", s);
                         eval_data_list(all_items, env, funcs)
                     }
@@ -223,7 +229,7 @@ pub(crate) fn apply_closure(
     env: &Env,
     funcs: &FnTable,
 ) -> Result<NDet, String> {
-    if params.len() != args.len() {
+    if args.len() > params.len() {
         return Err(format!(
             "closure: expected {} arguments, got {}",
             params.len(),
@@ -255,10 +261,78 @@ pub(crate) fn apply_closure(
     }
 
     let full_env = crate::eval_parts::pattern::prepend_env(match_env, capture_env);
+
+    // Partial application: fewer args than params → return a new closure
+    // that captures the supplied args and awaits the remaining params.
+    if args.len() < params.len() {
+        let remaining: Vec<Expr> = params[args.len()..].to_vec();
+        let closure = Atom::Closure(Box::new(crate::atom::ClosureData {
+            params: remaining,
+            body: body.clone(),
+            env: full_env,
+        }));
+        return Ok(NDet::single(closure));
+    }
+
     eval(body, &full_env, funcs)
 }
 
-/// Dispatch a function call using a borrowed Function.
+/// Build a partial-application closure for a named function `fname` that has
+/// been applied to fewer arguments than its defined arity (currying).
+///
+/// Returns `None` when `fname` is not defined at any arity greater than the
+/// number of supplied args — in that case the caller should fall back to
+/// treating the list as data.
+///
+/// The supplied args are evaluated now and embedded as literals; the missing
+/// slots become fresh closure params so that applying the result completes the
+/// call, e.g. `(myfunc 42)` → `(|-> ($__pa0) (myfunc 42 $__pa0))`.
+fn try_partial_application(
+    fname: &str,
+    args: &[Expr],
+    env: &Env,
+    funcs: &FnTable,
+) -> Option<Result<NDet, String>> {
+    let target = funcs
+        .arities(fname)
+        .into_iter()
+        .filter(|&a| a as usize > args.len())
+        .min()?;
+
+    let mut body_items: Vec<Expr> = Vec::with_capacity(target as usize + 1);
+    body_items.push(Expr::Symbol(fname.to_string()));
+    for arg in args {
+        match eval(arg, env, funcs) {
+            Ok(mut results) => match results.next() {
+                Some(val) => match crate::parser::atom_to_expr(&val) {
+                    Ok(e) => body_items.push(e),
+                    Err(e) => return Some(Err(e)),
+                },
+                None => return Some(Err(format!(
+                    "{}: argument produced no results", fname
+                ))),
+            },
+            Err(e) => return Some(Err(e)),
+        }
+    }
+
+    let missing = target as usize - args.len();
+    let mut params: Vec<Expr> = Vec::with_capacity(missing);
+    for i in 0..missing {
+        let name = format!("$__pa{}", i);
+        params.push(Expr::Symbol(name.clone()));
+        body_items.push(Expr::Symbol(name));
+    }
+
+    let closure = Atom::Closure(Box::new(crate::atom::ClosureData {
+        params,
+        body: Expr::List(body_items),
+        env: Env::new(),
+    }));
+    Some(Ok(NDet::single(closure)))
+}
+
+
 pub(crate) fn call_with_cloned(
     func: &Function,
     op_name: &str,
