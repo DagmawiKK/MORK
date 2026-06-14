@@ -207,6 +207,15 @@ impl FnTable {
             .get(name).and_then(|inner| inner.get(&arity)).cloned()
     }
 
+    /// Return all arities at which `name` is defined (unsorted).
+    /// Used to detect partial application (currying) opportunities.
+    pub fn arities(&self, name: &str) -> Vec<u8> {
+        self.map.read().unwrap()
+            .get(name)
+            .map(|inner| inner.keys().copied().collect())
+            .unwrap_or_default()
+    }
+
     /// Check if a named function is pure at the given arity.
     /// Returns `false` if the function is not found (conservative).
     pub fn is_pure(&self, name: &str, arity: u8) -> bool {
