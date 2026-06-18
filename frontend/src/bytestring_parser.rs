@@ -65,8 +65,8 @@ impl <'a> Context<'a> {
       else { i += 1 }
     }
 
-    if self.variables.len() < 64 {
-      // we can only have 64 variables, we don't need a vec here, perhaps uninit array?
+    if self.variables.len() < 128 {
+      // we can only have 128 variables, we don't need a vec here, perhaps uninit array?
       self.variables.push(var);
       Ok(None)
     } else {
@@ -98,7 +98,7 @@ pub trait Parser {
           };
           match it.get_or_put(id)? {
             None => { target.write_new_var(); target.loc += 1; }
-            Some(ind) => { target.write_var_ref(ind); target.loc += 1; }
+            Some(ind) => { target.write_var_ref(ind); target.loc += mork_expr::var_ref_byte_count_at(unsafe { target.root.ptr.byte_add(target.loc) }); }
           }
           return Ok(());
         }

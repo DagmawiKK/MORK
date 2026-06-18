@@ -69,6 +69,11 @@ impl ExprSource {
                 Tag::NewVar => {
                     rv.push('$');
                 }
+                Tag::LongVarRef => {
+                    let n = unsafe { *self.ptr.add(pos) };
+                    pos += 1;
+                    write!(&mut rv, "${}", n).unwrap();
+                }
                 Tag::VarRef(n) => {
                     write!(&mut rv, "${}", n).unwrap();
                 }

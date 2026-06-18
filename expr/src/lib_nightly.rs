@@ -36,6 +36,7 @@ pub fn item_sink<W: std::io::Write>(target: &mut W) -> impl Coroutine<SourceItem
                             continue;
                         }
                         Tag::LongArity => { panic!("item_sink should not receive LongArity; item_source converts to Arity(u8)") }
+                        Tag::LongVarRef => { panic!("item_sink should not receive LongVarRef; item_source converts to VarRef") }
                     }
                 }
                 SourceItem::Symbol(slice) => {
@@ -93,6 +94,11 @@ pub fn item_source<'a>(e: Expr) -> impl Coroutine<(), Yield=SourceItem<'a>, Retu
                     j += 2;
                     stack.push(a);
                     continue 'putting;
+                }
+                Tag::LongVarRef => {
+                    let r = unsafe { crate::read_var_ref_at(e.ptr.byte_add(j)) };
+                    j += 2;
+                    yield SourceItem::Tag(Tag::VarRef(r));
                 }
             };
 
@@ -203,6 +209,7 @@ pub fn apply_e<'o, OS : Coroutine<SourceItem<'o>, Yield=(), Return=std::io::Resu
                 es.as_mut().resume(SourceItem::Tag(Tag::Arity(a)));
             }
             CoroutineState::Yielded(SourceItem::Tag(Tag::LongArity)) => { unreachable!("item_source converts LongArity to Arity(u8)") }
+            CoroutineState::Yielded(SourceItem::Tag(Tag::LongVarRef)) => { unreachable!("item_source converts LongVarRef to VarRef") }
             CoroutineState::Yielded(SourceItem::Symbol(s)) => {
                 if PRINT_DEBUG { println!("{}@ \"{}\"", "  ".repeat(depth), unsafe { std::str::from_utf8_unchecked(s) }); }
                 es.as_mut().resume(SourceItem::Symbol(s));
