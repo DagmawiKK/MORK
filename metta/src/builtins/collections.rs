@@ -2,6 +2,8 @@
 
 use crate::atom::Atom;
 use crate::func::{FnTable, FunctionKind, NDet};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 fn expect(args: &[Atom], n: usize, name: &str) -> Result<(), String> {
     crate::builtins::arithmetic::expect_n_args(args, n, name)
@@ -15,7 +17,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
             Atom::Expr(items) => items.len(),
             _ => 1,
         };
-        Ok(NDet::single(Atom::Num(len as i128)))
+        Ok(NDet::single(Atom::num(len as i128)))
     });
     funcs.mark_pure("size-atom", 1);
 
@@ -25,7 +27,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
             Atom::Expr(items) => items.len(),
             _ => 1,
         };
-        Ok(NDet::single(Atom::Num(len as i128)))
+        Ok(NDet::single(Atom::num(len as i128)))
     });
     funcs.mark_pure("length", 1);
 
@@ -52,7 +54,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
     funcs.insert_native("cdr-atom", 1, |args, _| {
         expect(args, 1, "cdr-atom")?;
         match &args[0] {
-            Atom::Expr(items) if !items.is_empty() => Ok(NDet::single(Atom::Expr(items[1..].to_vec()))),
+            Atom::Expr(items) if !items.is_empty() => Ok(NDet::single(Atom::Expr(Arc::from(&items[1..])))),
             Atom::Expr(_) => Err("cdr-atom: empty list".into()),
             other => Err(format!("cdr-atom: expected list, got {}", other.to_sexpr_string())),
         }
@@ -62,7 +64,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
     funcs.insert_native("cdr", 1, |args, _| {
         expect(args, 1, "cdr")?;
         match &args[0] {
-            Atom::Expr(items) if !items.is_empty() => Ok(NDet::single(Atom::Expr(items[1..].to_vec()))),
+            Atom::Expr(items) if !items.is_empty() => Ok(NDet::single(Atom::Expr(Arc::from(&items[1..])))),
             Atom::Expr(_) => Err("cdr: empty list".into()),
             other => Err(format!("cdr: expected list, got {}", other.to_sexpr_string())),
         }
@@ -76,7 +78,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
             Atom::Expr(items) => out.extend(items.iter().cloned()),
             other => out.push(other.clone()),
         }
-        Ok(NDet::single(Atom::Expr(out)))
+        Ok(NDet::single(Atom::Expr(out.into())))
     });
     funcs.mark_pure("cons-atom", 2);
 
@@ -87,7 +89,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
             Atom::Expr(items) => out.extend(items.iter().cloned()),
             other => out.push(other.clone()),
         }
-        Ok(NDet::single(Atom::Expr(out)))
+        Ok(NDet::single(Atom::Expr(out.into())))
     });
     funcs.mark_pure("cons", 2);
 
@@ -96,8 +98,8 @@ pub fn register_collection_builtins(funcs: &FnTable) {
         match &args[0] {
             Atom::Expr(items) if !items.is_empty() => {
                 let head = items[0].clone();
-                let rest = Atom::Expr(items[1..].to_vec());
-                Ok(NDet::single(Atom::Expr(vec![head, rest])))
+                let rest = Atom::Expr(Arc::from(&items[1..]));
+                Ok(NDet::single(Atom::Expr(Arc::from([head, rest]))))
             }
             Atom::Expr(_) => Err("decons-atom: empty list".into()),
             other => Err(format!("decons-atom: expected list, got {}", other.to_sexpr_string())),
@@ -110,8 +112,8 @@ pub fn register_collection_builtins(funcs: &FnTable) {
         match &args[0] {
             Atom::Expr(items) if !items.is_empty() => {
                 let head = items[0].clone();
-                let rest = Atom::Expr(items[1..].to_vec());
-                Ok(NDet::single(Atom::Expr(vec![head, rest])))
+                let rest = Atom::Expr(Arc::from(&items[1..]));
+                Ok(NDet::single(Atom::Expr(Arc::from([head, rest]))))
             }
             Atom::Expr(_) => Err("decons: empty list".into()),
             other => Err(format!("decons: expected list, got {}", other.to_sexpr_string())),
@@ -122,14 +124,14 @@ pub fn register_collection_builtins(funcs: &FnTable) {
     funcs.insert_native("append", 2, |args, _| {
         expect(args, 2, "append")?;
         let mut out = match &args[0] {
-            Atom::Expr(items) => items.clone(),
+            Atom::Expr(items) => items.to_vec(),
             other => vec![other.clone()],
         };
         match &args[1] {
             Atom::Expr(items) => out.extend(items.iter().cloned()),
             other => out.push(other.clone()),
         }
-        Ok(NDet::single(Atom::Expr(out)))
+        Ok(NDet::single(Atom::Expr(out.into())))
     });
     funcs.mark_pure("append", 2);
 
@@ -137,9 +139,9 @@ pub fn register_collection_builtins(funcs: &FnTable) {
         expect(args, 1, "reverse")?;
         match &args[0] {
             Atom::Expr(items) => {
-                let mut rev = items.clone();
+                let mut rev = items.to_vec();
                 rev.reverse();
-                Ok(NDet::single(Atom::Expr(rev)))
+                Ok(NDet::single(Atom::Expr(rev.into())))
             }
             other => Err(format!("reverse: expected list, got {}", other.to_sexpr_string())),
         }
@@ -149,7 +151,8 @@ pub fn register_collection_builtins(funcs: &FnTable) {
     funcs.insert_native("index-atom", 2, |args, _| {
         expect(args, 2, "index-atom")?;
         let idx = match &args[1] {
-            Atom::Num(n) => usize::try_from(*n)
+            Atom::Num(n) => args[1].as_num()
+                .and_then(|i| usize::try_from(i).map_err(|_| format!("index-atom: negative index {}", i)))
                 .map_err(|_| format!("index-atom: index must be non-negative, got {}", n))?,
             other => return Err(format!("index-atom: index must be a number, got {}", other.to_sexpr_string())),
         };
@@ -220,34 +223,34 @@ pub fn register_collection_builtins(funcs: &FnTable) {
     funcs.insert_native("msort", 1, |args, _| {
         expect(args, 1, "msort")?;
         let mut items = match &args[0] {
-            Atom::Expr(v) => v.clone(),
+            Atom::Expr(v) => v.to_vec(),
             a => vec![a.clone()],
         };
         items.sort_by(|a, b| a.to_sexpr_string().cmp(&b.to_sexpr_string()));
-        Ok(NDet::single(Atom::Expr(items)))
+        Ok(NDet::single(Atom::Expr(items.into())))
     });
     funcs.mark_pure("msort", 1);
 
     funcs.insert_native("sort", 1, |args, _| {
         expect(args, 1, "sort")?;
         let mut items = match &args[0] {
-            Atom::Expr(v) => v.clone(),
+            Atom::Expr(v) => v.to_vec(),
             a => vec![a.clone()],
         };
         items.sort_by(|a, b| a.to_sexpr_string().cmp(&b.to_sexpr_string()));
         items.dedup();
-        Ok(NDet::single(Atom::Expr(items)))
+        Ok(NDet::single(Atom::Expr(items.into())))
     });
     funcs.mark_pure("sort", 1);
 
     funcs.insert_native("sort-atom", 1, |args, _| {
         expect(args, 1, "sort-atom")?;
         let mut items = match &args[0] {
-            Atom::Expr(v) => v.clone(),
+            Atom::Expr(v) => v.to_vec(),
             a => vec![a.clone()],
         };
         items.sort_by(|a, b| a.to_sexpr_string().cmp(&b.to_sexpr_string()));
-        Ok(NDet::single(Atom::Expr(items)))
+        Ok(NDet::single(Atom::Expr(items.into())))
     });
     funcs.mark_pure("sort-atom", 1);
 
@@ -266,11 +269,11 @@ pub fn register_collection_builtins(funcs: &FnTable) {
         match &args[1] {
             Atom::Expr(items) => {
                 let filtered: Vec<Atom> = items.iter().filter(|x| **x != args[0]).cloned().collect();
-                Ok(NDet::single(Atom::Expr(filtered)))
+                Ok(NDet::single(Atom::Expr(filtered.into())))
             }
             other => {
                 if *other == args[0] {
-                    Ok(NDet::single(Atom::Expr(vec![])))
+                    Ok(NDet::single(Atom::Expr(Arc::from([]))))
                 } else {
                     Ok(NDet::single(other.clone()))
                 }
@@ -285,13 +288,13 @@ pub fn register_collection_builtins(funcs: &FnTable) {
             Atom::Expr(items) => {
                 let mut seen = Vec::with_capacity(items.len());
                 let mut deduped = Vec::with_capacity(items.len());
-                for item in items {
+                for item in items.iter() {
                     if !seen.contains(item) {
                         seen.push(item.clone());
                         deduped.push(item.clone());
                     }
                 }
-                Ok(NDet::single(Atom::Expr(deduped)))
+                Ok(NDet::single(Atom::Expr(deduped.into())))
             }
             other => Ok(NDet::single(other.clone())),
         }
@@ -303,7 +306,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
         match &args[0] {
             Atom::Expr(items) => {
                 let mut deduped: Vec<Atom> = Vec::with_capacity(items.len());
-                'outer: for item in items {
+                'outer: for item in items.iter() {
                     for existing in &deduped {
                         let mut map_ab = std::collections::HashMap::new();
                         let mut map_ba = std::collections::HashMap::new();
@@ -313,7 +316,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                     }
                     deduped.push(item.clone());
                 }
-                Ok(NDet::single(Atom::Expr(deduped)))
+                Ok(NDet::single(Atom::Expr(deduped.into())))
             }
             other => Ok(NDet::single(other.clone())),
         }
@@ -322,34 +325,56 @@ pub fn register_collection_builtins(funcs: &FnTable) {
 
     funcs.insert_native("union-atom", 2, |args, _| {
         expect(args, 2, "union-atom")?;
-        let items1 = match &args[0] { Atom::Expr(v) => v.clone(), other => vec![other.clone()] };
-        let items2 = match &args[1] { Atom::Expr(v) => v.clone(), other => vec![other.clone()] };
-        let mut result = items1;
-        for item in items2 {
-            if !result.contains(&item) { result.push(item); }
-        }
-        Ok(NDet::single(Atom::Expr(result)))
+        let mut items1 = match &args[0] { Atom::Expr(v) => v.to_vec(), other => vec![other.clone()] };
+        let items2: Vec<Atom> = match &args[1] { Atom::Expr(v) => v.to_vec(), other => vec![other.clone()] };
+        items1.extend(items2);
+        Ok(NDet::single(Atom::Expr(items1.into())))
     });
     funcs.mark_pure("union-atom", 2);
 
     funcs.insert_native("intersection-atom", 2, |args, _| {
         expect(args, 2, "intersection-atom")?;
-        let items1 = match &args[0] { Atom::Expr(v) => v.clone(), other => vec![other.clone()] };
-        let items2 = match &args[1] { Atom::Expr(v) => v.clone(), other => vec![other.clone()] };
+        let items1: Vec<Atom> = match &args[0] { Atom::Expr(v) => v.to_vec(), other => vec![other.clone()] };
+        let items2: Vec<Atom> = match &args[1] { Atom::Expr(v) => v.to_vec(), other => vec![other.clone()] };
+        let mut count2 = HashMap::new();
+        for item in &items2 {
+            *count2.entry(item.clone()).or_insert(0usize) += 1;
+        }
         let mut result = Vec::new();
         for item in &items1 {
-            if items2.contains(item) && !result.contains(item) { result.push(item.clone()); }
+            if let Some(c) = count2.get_mut(item) {
+                if *c > 0 {
+                    result.push(item.clone());
+                    *c -= 1;
+                }
+            }
         }
-        Ok(NDet::single(Atom::Expr(result)))
+        Ok(NDet::single(Atom::Expr(result.into())))
     });
     funcs.mark_pure("intersection-atom", 2);
 
     funcs.insert_native("subtraction-atom", 2, |args, _| {
         expect(args, 2, "subtraction-atom")?;
-        let items1 = match &args[0] { Atom::Expr(v) => v.clone(), other => vec![other.clone()] };
-        let items2 = match &args[1] { Atom::Expr(v) => v.clone(), other => vec![other.clone()] };
-        let result: Vec<Atom> = items1.into_iter().filter(|x| !items2.contains(x)).collect();
-        Ok(NDet::single(Atom::Expr(result)))
+        let items1: Vec<Atom> = match &args[0] { Atom::Expr(v) => v.to_vec(), other => vec![other.clone()] };
+        let items2: Vec<Atom> = match &args[1] { Atom::Expr(v) => v.to_vec(), other => vec![other.clone()] };
+        let mut count2 = HashMap::new();
+        for item in &items2 {
+            *count2.entry(item.clone()).or_insert(0usize) += 1;
+        }
+        let mut result = Vec::new();
+        for item in items1 {
+            if let Some(c) = count2.get_mut(&item) {
+                if *c > 0 {
+                    *c -= 1;
+                    // skip — this occurrence consumed by subtraction
+                } else {
+                    result.push(item);
+                }
+            } else {
+                result.push(item);
+            }
+        }
+        Ok(NDet::single(Atom::Expr(result.into())))
     });
     funcs.mark_pure("subtraction-atom", 2);
 
@@ -359,13 +384,13 @@ pub fn register_collection_builtins(funcs: &FnTable) {
             Atom::Expr(items) => {
                 let mut seen = Vec::with_capacity(items.len());
                 let mut deduped = Vec::with_capacity(items.len());
-                for item in items {
+                for item in items.iter() {
                     if !seen.contains(item) {
                         seen.push(item.clone());
                         deduped.push(item.clone());
                     }
                 }
-                Ok(NDet::single(Atom::Expr(deduped)))
+                Ok(NDet::single(Atom::Expr(deduped.into())))
             }
             other => Ok(NDet::single(other.clone())),
         }
@@ -374,7 +399,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
 
     funcs.insert_native("foldl", 3, |args, table| {
         expect(args, 3, "foldl")?;
-        let items = match &args[2] { Atom::Expr(v) => v.clone(), other => vec![other.clone()] };
+        let items: Vec<Atom> = match &args[2] { Atom::Expr(v) => v.to_vec(), other => vec![other.clone()] };
         let mut acc = args[1].clone();
         let func_atom = &args[0];
         match func_atom {
@@ -398,7 +423,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                         .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
                     let acc_expr = crate::parser::atom_to_expr(&acc)
                         .unwrap_or(crate::parser::Expr::Symbol(acc.to_sexpr_string()));
-                    let call = crate::parser::Expr::List(vec![fn_expr.clone(), acc_expr, item_expr]);
+                    let call = crate::parser::Expr::List(Arc::from([fn_expr.clone(), acc_expr, item_expr]));
                     let body_rs = crate::eval::machine::step::run_rs(
                         std::sync::Arc::new(call),
                         crate::env::Env::new(),
@@ -418,7 +443,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                         .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
                     let acc_expr = crate::parser::atom_to_expr(&acc)
                         .unwrap_or(crate::parser::Expr::Symbol(acc.to_sexpr_string()));
-                    let call = crate::parser::Expr::List(vec![func_expr.clone(), acc_expr, item_expr]);
+                    let call = crate::parser::Expr::List(Arc::from([func_expr.clone(), acc_expr, item_expr]));
                     let body_rs = crate::eval::machine::step::run_rs(
                         std::sync::Arc::new(call),
                         crate::env::Env::new(),
@@ -439,8 +464,8 @@ pub fn register_collection_builtins(funcs: &FnTable) {
     funcs.insert_native("map-atom", 2, |args, table| {
         expect(args, 2, "map-atom")?;
         // map-atom takes (list func) order
-        let items = match &args[0] {
-            Atom::Expr(v) => v.clone(),
+        let items: Vec<Atom> = match &args[0] {
+            Atom::Expr(v) => v.to_vec(),
             other => vec![other.clone()],
         };
         let func_atom = &args[1];
@@ -456,7 +481,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                             })?;
                             results.push(val);
                         }
-                        return Ok(NDet::single(Atom::Expr(results)));
+                        return Ok(NDet::single(Atom::Expr(results.into())));
                     }
                 }
                 // Fallback for user-defined functions
@@ -465,7 +490,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                 for item in &items {
                     let item_expr = crate::parser::atom_to_expr(item)
                         .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
-                    let call = crate::parser::Expr::List(vec![fn_expr.clone(), item_expr]);
+                    let call = crate::parser::Expr::List(std::sync::Arc::from([fn_expr.clone(), item_expr]));
                     let body_rs = crate::eval::machine::step::run_rs(
                         std::sync::Arc::new(call),
                         crate::env::Env::new(),
@@ -480,8 +505,8 @@ pub fn register_collection_builtins(funcs: &FnTable) {
             }
             Atom::Expr(parts) if parts.len() == 3 && parts[0] == Atom::sym("partial") => {
                 if let Atom::Sym(fn_name) = &parts[1] {
-                    let old_args = match &parts[2] {
-                        Atom::Expr(v) => v.clone(),
+                    let old_args: Vec<Atom> = match &parts[2] {
+                        Atom::Expr(v) => v.to_vec(),
                         other => vec![other.clone()],
                     };
                     let fn_expr = crate::parser::atom_to_expr(&Atom::Sym(fn_name.clone()))
@@ -496,7 +521,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                         let mut call_items = vec![fn_expr.clone()];
                         call_items.extend(old_arg_exprs.clone());
                         call_items.push(item_expr);
-                        let call = crate::parser::Expr::List(call_items);
+                        let call = crate::parser::Expr::List(call_items.into());
                         let body_rs = crate::eval::machine::step::run_rs(
                             std::sync::Arc::new(call),
                             crate::env::Env::new(),
@@ -518,7 +543,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                 for item in &items {
                     let item_expr = crate::parser::atom_to_expr(item)
                         .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
-                    let call = crate::parser::Expr::List(vec![func_expr.clone(), item_expr]);
+                    let call = crate::parser::Expr::List(std::sync::Arc::from([func_expr.clone(), item_expr]));
                     let body_rs = crate::eval::machine::step::run_rs(
                         std::sync::Arc::new(call),
                         crate::env::Env::new(),
@@ -532,11 +557,11 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                 }
             }
         }
-        Ok(NDet::single(Atom::Expr(results)))
+        Ok(NDet::single(Atom::Expr(results.into())))
     });
     funcs.insert_native("maplist", 2, |args, table| {
         expect(args, 2, "maplist")?;
-        let items = match &args[1] { Atom::Expr(v) => v.clone(), other => vec![other.clone()] };
+        let items: Vec<Atom> = match &args[1] { Atom::Expr(v) => v.to_vec(), other => vec![other.clone()] };
         let func_atom = &args[0];
         let mut results = Vec::with_capacity(items.len());
         match func_atom {
@@ -550,7 +575,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                             })?;
                             results.push(val);
                         }
-                        return Ok(NDet::single(Atom::Expr(results)));
+                        return Ok(NDet::single(Atom::Expr(results.into())));
                     }
                 }
                 // Fallback for user-defined functions
@@ -559,7 +584,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                 for item in &items {
                     let item_expr = crate::parser::atom_to_expr(item)
                         .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
-                    let call = crate::parser::Expr::List(vec![fn_expr.clone(), item_expr]);
+                    let call = crate::parser::Expr::List(Arc::from([fn_expr.clone(), item_expr]));
                     let body_rs = crate::eval::machine::step::run_rs(
                         std::sync::Arc::new(call),
                         crate::env::Env::new(),
@@ -578,7 +603,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                 for item in &items {
                     let item_expr = crate::parser::atom_to_expr(item)
                         .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
-                    let call = crate::parser::Expr::List(vec![func_expr.clone(), item_expr]);
+                    let call = crate::parser::Expr::List(Arc::from([func_expr.clone(), item_expr]));
                     let body_rs = crate::eval::machine::step::run_rs(
                         std::sync::Arc::new(call),
                         crate::env::Env::new(),
@@ -592,12 +617,12 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                 }
             }
         }
-        Ok(NDet::single(Atom::Expr(results)))
+        Ok(NDet::single(Atom::Expr(results.into())))
     });
 
     funcs.insert_native("filter-atom", 2, |args, table| {
         expect(args, 2, "filter-atom")?;
-        let items = match &args[1] { Atom::Expr(v) => v.clone(), other => vec![other.clone()] };
+        let items: Vec<Atom> = match &args[1] { Atom::Expr(v) => v.to_vec(), other => vec![other.clone()] };
         let func_atom = &args[0];
         let mut results = Vec::with_capacity(items.len());
         match func_atom {
@@ -610,7 +635,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                                 if val == Atom::sym("True") { results.push(item.clone()); }
                             }
                         }
-                        return Ok(NDet::single(Atom::Expr(results)));
+                        return Ok(NDet::single(Atom::Expr(results.into())));
                     }
                 }
                 // Fallback for user-defined functions
@@ -619,7 +644,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                 for item in &items {
                     let item_expr = crate::parser::atom_to_expr(item)
                         .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
-                    let call = crate::parser::Expr::List(vec![fn_expr.clone(), item_expr]);
+                    let call = crate::parser::Expr::List(Arc::from([fn_expr.clone(), item_expr]));
                     let body_rs = crate::eval::machine::step::run_rs(
                         std::sync::Arc::new(call),
                         crate::env::Env::new(),
@@ -637,7 +662,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                 for item in &items {
                     let item_expr = crate::parser::atom_to_expr(item)
                         .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
-                    let call = crate::parser::Expr::List(vec![func_expr.clone(), item_expr]);
+                    let call = crate::parser::Expr::List(Arc::from([func_expr.clone(), item_expr]));
                     let body_rs = crate::eval::machine::step::run_rs(
                         std::sync::Arc::new(call),
                         crate::env::Env::new(),
@@ -650,16 +675,16 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                 }
             }
         }
-        Ok(NDet::single(Atom::Expr(results)))
+        Ok(NDet::single(Atom::Expr(results.into())))
     });
 
     funcs.insert_native("concat", 2, |args, _| {
         expect(args, 2, "concat")?;
         match (&args[0], &args[1]) {
             (Atom::Expr(a), Atom::Expr(b)) => {
-                let mut out = a.clone();
+                let mut out = a.to_vec();
                 out.extend(b.iter().cloned());
-                Ok(NDet::single(Atom::Expr(out)))
+                Ok(NDet::single(Atom::Expr(out.into())))
             }
             (Atom::Sym(a), Atom::Sym(b)) => Ok(NDet::single(Atom::sym(&format!("{a}{b}")))),
             _ => Ok(NDet::single(Atom::sym(&format!("{}{}", args[0].to_sexpr_string(), args[1].to_sexpr_string())))),
@@ -676,7 +701,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
     funcs.insert_native("atom_chars", 1, |args, _| {
         expect(args, 1, "atom_chars")?;
         let chars: Vec<Atom> = args[0].to_sexpr_string().chars().map(|c| Atom::sym(&c.to_string())).collect();
-        Ok(NDet::single(Atom::Expr(chars)))
+        Ok(NDet::single(Atom::Expr(chars.into())))
     });
     funcs.mark_pure("atom_chars", 1);
 
@@ -685,7 +710,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         args[0].hash(&mut hasher);
-        Ok(NDet::single(Atom::Num(hasher.finish() as i128)))
+        Ok(NDet::single(Atom::num(hasher.finish() as i128)))
     });
     funcs.mark_pure("term_hash", 1);
 }

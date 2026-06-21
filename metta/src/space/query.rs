@@ -4,7 +4,9 @@ use crate::atom::Atom;
 use crate::env::Env;
 use crate::func::FnTable;
 use crate::parser::Expr;
+use rayon::prelude::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::space::core::{MatchResult, Pattern};
 
@@ -49,27 +51,81 @@ pub fn collect_match_results(
     if let Expr::List(items) = pattern_expr {
         if let Some(Expr::Symbol(symbol)) = items.first() {
             if symbol == "," {
-                let mut bindings_sets: Vec<Vec<(String, Atom)>> = vec![Vec::new()];
-                for subpattern in &items[1..] {
-                    let submatches = collect_match_results(funcs, space_ref, subpattern, env)?;
-                    let mut next = Vec::new();
-                    for bindings in &bindings_sets {
-                        for matched in &submatches {
-                            if let Some(merged) = merge_match_bindings(bindings, &matched.bindings)
-                            {
-                                next.push(merged);
+                let subpatterns = &items[1..];
+                // Evaluate the first subpattern serially to get the initial binding sets.
+                let initial = collect_match_results(funcs, space_ref, &subpatterns[0], env)?;
+                let initial_bindings: Vec<Vec<(String, Atom)>> = initial
+                    .into_iter()
+                    .map(|m| m.bindings)
+                    .collect();
+
+                // Each initial binding is an independent search branch for the remaining
+                // subpatterns. Spawn one rayon task per initial binding — coarse-grained
+                // tasks with significant work per task (the full remaining conjunction).
+                // RwLock on space allows concurrent readers.
+                let remaining = &subpatterns[1..];
+                let results: Vec<Vec<(String, Atom)>> = if !remaining.is_empty()
+                    && initial_bindings.len() > 1
+                {
+                    initial_bindings
+                        .par_iter()
+                        .map(|seed| -> Result<Vec<Vec<(String, Atom)>>, String> {
+                            let mut bindings_sets = vec![seed.clone()];
+                            for subpattern in remaining {
+                                let mut next = Vec::new();
+                                for bindings in &bindings_sets {
+                                    let bound_env =
+                                        crate::eval::shared::env::bind_all(env, bindings);
+                                    let submatches = collect_match_results(
+                                        funcs, space_ref, subpattern, &bound_env,
+                                    )?;
+                                    for matched in &submatches {
+                                        if let Some(merged) =
+                                            merge_match_bindings(bindings, &matched.bindings)
+                                        {
+                                            next.push(merged);
+                                        }
+                                    }
+                                }
+                                bindings_sets = next;
+                                if bindings_sets.is_empty() {
+                                    break;
+                                }
+                            }
+                            Ok(bindings_sets)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into_iter()
+                        .flatten()
+                        .collect()
+                } else {
+                    // Single initial binding or no remaining subpatterns: serial.
+                    let mut bindings_sets = initial_bindings;
+                    for subpattern in remaining {
+                        let mut next = Vec::new();
+                        for bindings in &bindings_sets {
+                            let bound_env = crate::eval::shared::env::bind_all(env, bindings);
+                            let submatches =
+                                collect_match_results(funcs, space_ref, subpattern, &bound_env)?;
+                            for matched in &submatches {
+                                if let Some(merged) =
+                                    merge_match_bindings(bindings, &matched.bindings)
+                                {
+                                    next.push(merged);
+                                }
                             }
                         }
+                        bindings_sets = next;
+                        if bindings_sets.is_empty() {
+                            break;
+                        }
                     }
-                    bindings_sets = next;
-                    if bindings_sets.is_empty() {
-                        break;
-                    }
-                }
-                return Ok(bindings_sets
+                    bindings_sets
+                };
+                return Ok(results
                     .into_iter()
                     .map(|bindings| MatchResult {
-                        atom: Atom::Expr(vec![Atom::sym(",")]),
+                        atom: Atom::Expr(Arc::from([Atom::sym(",")])),
                         bindings,
                     })
                     .collect());

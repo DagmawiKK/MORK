@@ -11,6 +11,7 @@ use crate::atom::Atom;
 use crate::env::Env;
 use crate::func::FnTable;
 use crate::parser::Expr;
+use rayon::prelude::*;
 use std::sync::Arc;
 
 /// Pop the top `n` result sets from the value stack.
@@ -41,6 +42,25 @@ pub(crate) fn cartesian_product(options: &[Vec<Atom>]) -> Vec<Vec<Atom>> {
         result = next;
     }
     result
+}
+
+/// Lazy cartesian product: visits every combination via callback without
+/// materialising the full M^K intermediate Vec. Uses O(depth) stack memory.
+#[inline]
+fn cartesian_product_apply<E>(
+    options: &[Vec<Atom>],
+    buf: &mut Vec<Atom>,
+    f: &mut impl FnMut(&[Atom]) -> Result<(), E>,
+) -> Result<(), E> {
+    if options.is_empty() {
+        return f(buf);
+    }
+    for atom in &options[0] {
+        buf.push(atom.clone());
+        cartesian_product_apply(&options[1..], buf, f)?;
+        buf.pop();
+    }
+    Ok(())
 }
 
 /// Threaded cartesian product of result sets, preserving environments.
@@ -92,7 +112,7 @@ pub(crate) fn apply_frame(
             let result = match out.len() {
                 0 => Vec::new(),
                 1 => plain(out),
-                _ if had_bindings => plain(vec![Atom::Expr(out)]),
+                _ if had_bindings => plain(vec![Atom::Expr(out.into())]),
                 _ => plain(out),
             };
             vals.push(result);
@@ -218,7 +238,7 @@ pub(crate) fn apply_frame(
             let acc = acc_rs.into_iter().next().map(|(a, _)| a)
                 .ok_or_else(|| "foldl-atom: acc arg produced no result".to_string())?;
             let items: Vec<crate::atom::Atom> = match list_rs.into_iter().next().map(|(a, _)| a) {
-                Some(crate::atom::Atom::Expr(v)) => v,
+                Some(crate::atom::Atom::Expr(v)) => v.to_vec(),
                 Some(other) => vec![other],
                 None => return Err("foldl-atom: list arg produced no result".to_string()),
             };
@@ -233,7 +253,7 @@ pub(crate) fn apply_frame(
                 .unwrap_or(crate::parser::Expr::Symbol(acc.to_sexpr_string()));
             let item_expr = crate::parser::atom_to_expr(&item)
                 .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
-            let call = crate::parser::Expr::List(vec![func_expr, acc_expr, item_expr]);
+            let call = crate::parser::Expr::List(Arc::from([func_expr, acc_expr, item_expr]));
             work.push(Task::Apply(Frame::FoldlAtom {
                 items: Arc::new(items),
                 index: 1,
@@ -298,7 +318,7 @@ pub(crate) fn apply_frame(
                 .unwrap_or(crate::parser::Expr::Symbol(new_acc.to_sexpr_string()));
             let item_expr = crate::parser::atom_to_expr(&item)
                 .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
-            let call = crate::parser::Expr::List(vec![func_expr, acc_expr, item_expr]);
+            let call = crate::parser::Expr::List(Arc::from([func_expr, acc_expr, item_expr]));
             work.push(Task::Apply(Frame::FoldlAtom {
                 items,
                 index: index + 1,
@@ -403,13 +423,15 @@ pub(crate) fn apply_frame(
                 vals.push(Vec::new());
                 return Ok(());
             }
-            work.push(Task::Apply(Frame::Gather { n: branches.len() }));
-            for (expr, body_env) in branches.into_iter().rev() {
-                work.push(Task::Eval {
-                    expr,
-                    env: body_env,
-                });
+            let n = branches.len();
+            // Reverse so pop() gives original order (first branch evaluated first).
+            let mut remaining: Vec<_> = branches.into_iter().rev().collect();
+            let (first_expr, first_env) = remaining.pop().unwrap();
+            work.push(Task::Apply(Frame::Gather { n }));
+            if !remaining.is_empty() {
+                work.push(Task::Apply(Frame::SpaceMatchStream { remaining }));
             }
+            work.push(Task::Eval { expr: first_expr, env: first_env });
             Ok(())
         }
         Frame::SpaceAdd { atom, env } => {
@@ -472,7 +494,7 @@ pub(crate) fn apply_frame(
         }
         Frame::CollapseGather => {
             let result_set = pop_n(vals, 1).pop().unwrap();
-            vals.push(plain(vec![Atom::Expr(atoms_of(&result_set))]));
+            vals.push(plain(vec![Atom::Expr(Arc::from(atoms_of(&result_set)))]));
             Ok(())
         }
         Frame::OnceCut => {
@@ -521,6 +543,17 @@ pub(crate) fn apply_frame(
                     env: next_env,
                 });
             } else {
+                // Tail call: Gather{1} between MergeEnv and the deeper continuation
+                // is a no-op (pop 1 ResultSet, re-emit unchanged). Remove it to save
+                // one frame allocation per tail step — halves stack depth for linear
+                // tail-recursive chain programs like iterative div/fib.
+                let n = work.len();
+                if n >= 2
+                    && matches!(work[n - 1], Task::Apply(Frame::MergeEnv { .. }))
+                    && matches!(work[n - 2], Task::Apply(Frame::Gather { n: 1 }))
+                {
+                    work.remove(n - 2);
+                }
                 work.push(Task::Eval {
                     expr: Arc::new(args[args.len() - 1].clone()),
                     env: next_env,
@@ -536,7 +569,7 @@ pub(crate) fn apply_frame(
                 .map(|(atom, _)| atom)
                 .ok_or_else(|| "superpose: argument produced no results".to_string())?;
             match first {
-                Atom::Expr(elements) => vals.push(plain(elements)),
+                Atom::Expr(elements) => vals.push(plain(elements.to_vec())),
                 other => vals.push(plain(vec![other])),
             }
             Ok(())
@@ -548,16 +581,15 @@ pub(crate) fn apply_frame(
                 vals.push(Vec::new());
                 return Ok(());
             }
-            let combos = cartesian_product(&tail_atoms);
-            let lists = combos
-                .into_iter()
-                .map(|tail_values| {
-                    let mut atoms = Vec::with_capacity(tail_values.len() + 1);
-                    atoms.push(head.clone());
-                    atoms.extend(tail_values);
-                    Atom::Expr(atoms)
-                })
-                .collect();
+            let mut lists = Vec::new();
+            let mut buf = Vec::new();
+            cartesian_product_apply(&tail_atoms, &mut buf, &mut |combo: &[Atom]| {
+                let mut atoms = Vec::with_capacity(combo.len() + 1);
+                atoms.push(head.clone());
+                atoms.extend_from_slice(combo);
+                lists.push(Atom::Expr(atoms.into()));
+                Ok::<(), String>(())
+            })?;
             vals.push(plain(lists));
             Ok(())
         }
@@ -568,8 +600,12 @@ pub(crate) fn apply_frame(
                 vals.push(Vec::new());
                 return Ok(());
             }
-            let combos = cartesian_product(&per_elem);
-            let lists: Vec<Atom> = combos.into_iter().map(Atom::Expr).collect();
+            let mut lists = Vec::new();
+            let mut buf = Vec::new();
+            cartesian_product_apply(&per_elem, &mut buf, &mut |combo: &[Atom]| {
+                lists.push(Atom::Expr(Arc::from(combo)));
+                Ok::<(), String>(())
+            })?;
             vals.push(plain(lists));
             Ok(())
         }
@@ -589,14 +625,14 @@ pub(crate) fn apply_frame(
                         // Try native
                         if let Some(function) = funcs.get(name, arity as u8) {
                             if let crate::func::FunctionKind::Native { func } = &function.kind {
-                                let combos = cartesian_product(&arg_options);
                                 let mut results = Vec::new();
-                                for slice in &combos {
+                                let mut buf = Vec::new();
+                                cartesian_product_apply(&arg_options, &mut buf, &mut |slice: &[Atom]| {
                                     match func(slice, funcs) {
-                                        Ok(nd) => results.extend(nd),
-                                        Err(e) => return Err(e),
+                                        Ok(nd) => { results.extend(nd); Ok(()) }
+                                        Err(e) => Err(e),
                                     }
-                                }
+                                })?;
                                 vals.push(plain(results));
                                 return Ok(());
                             }
@@ -606,6 +642,19 @@ pub(crate) fn apply_frame(
                             crate::eval::forms::query::lookup_user_clauses(name, arity as u8, funcs)
                         {
                             let combos_with_envs = threaded_combinations(&arg_sets);
+                            // Memo: single-combo pure calls only (multi-combo = ndet, skip).
+                            let memo_key = if funcs.is_pure_fn(name, arity as u8)
+                                && combos_with_envs.len() == 1
+                            {
+                                let k = (name.to_string(), combos_with_envs[0].0.clone());
+                                if let Some(cached) = funcs.memo_get(&k) {
+                                    vals.push(plain(cached));
+                                    return Ok(());
+                                }
+                                Some(k)
+                            } else {
+                                None
+                            };
                             let mut bodies: Vec<(Arc<Expr>, Env, i64)> = Vec::new();
                             for (combo, combo_env) in &combos_with_envs {
                                 for (patterns, body) in &clauses {
@@ -617,12 +666,30 @@ pub(crate) fn apply_frame(
                                 }
                             }
                             if !bodies.is_empty() {
-                                let mut out = Vec::new();
-                                for (body, body_env, _) in bodies {
-                                    let body_rs = super::step::run_rs(body, body_env, funcs, &mut None)?;
-                                    out.extend(body_rs);
+                                let merged: Vec<Atom> = if bodies.len() > 1
+                                    && funcs.is_parallelizable(name, arity as u8)
+                                {
+                                    bodies
+                                        .into_par_iter()
+                                        .map(|(body, body_env, _)| {
+                                            super::step::run_rs(body, body_env, funcs, &mut None)
+                                                .map(|rs| rs.into_iter().map(|(a, _)| a).collect::<Vec<_>>())
+                                        })
+                                        .collect::<Result<Vec<_>, _>>()?
+                                        .into_iter()
+                                        .flatten()
+                                        .collect()
+                                } else {
+                                    let mut out = Vec::new();
+                                    for (body, body_env, _) in bodies {
+                                        let body_rs = super::step::run_rs(body, body_env, funcs, &mut None)?;
+                                        out.extend(body_rs);
+                                    }
+                                    out.into_iter().map(|(a, _)| a).collect()
+                                };
+                                if let Some(key) = memo_key {
+                                    funcs.memo_set(key, merged.clone());
                                 }
-                                let merged: Vec<Atom> = out.into_iter().map(|(a, _)| a).collect();
                                 vals.push(plain(merged));
                                 return Ok(());
                             }
@@ -631,11 +698,11 @@ pub(crate) fn apply_frame(
                         if funcs.has_higher_arity(name, arity) {
                             let partial_args: Vec<Atom> = arg_options.into_iter().flatten().collect();
                             vals.push(plain(vec![
-                                Atom::Expr(vec![
+                                Atom::Expr(Arc::from([
                                     Atom::sym("partial"),
                                     Atom::Sym(name.clone()),
-                                    Atom::Expr(partial_args),
-                                ])
+                                    Atom::Expr(Arc::from(partial_args)),
+                                ]))
                             ]));
                             return Ok(());
                         }
@@ -776,11 +843,35 @@ pub(crate) fn apply_frame(
             let all_atoms: Vec<Vec<Atom>> = std::iter::once(
                 head_rs.into_iter().map(|(a, _)| a).collect()
             ).chain(per_elem).collect();
-            let combos = cartesian_product(&all_atoms);
-            let lists: Vec<Atom> = combos.into_iter().map(Atom::Expr).collect();
+            let mut lists = Vec::new();
+            let mut buf = Vec::new();
+            cartesian_product_apply(&all_atoms, &mut buf, &mut |combo: &[Atom]| {
+                lists.push(Atom::Expr(Arc::from(combo)));
+                Ok::<(), String>(())
+            })?;
             vals.push(plain(lists));
             Ok(())
         }
+        Frame::SpaceMatchStream { mut remaining } => {
+            // One branch just completed (its result is on vals).
+            // Fire the next branch, or do nothing if we're the last (Gather collects).
+            if let Some((expr, env)) = remaining.pop() {
+                work.push(Task::Apply(Frame::SpaceMatchStream { remaining }));
+                work.push(Task::Eval { expr, env });
+            }
+            Ok(())
+        }
+
+        Frame::MemoStore { key } => {
+            // Gather already pushed its result onto vals. Peek at it, store in
+            // cache tagged with the current mutation stamp, leave it in place.
+            if let Some(top) = vals.last() {
+                let result: Vec<Atom> = top.iter().map(|(a, _)| a.clone()).collect();
+                funcs.memo_set(key.clone(), result);
+            }
+            Ok(())
+        }
+
         Frame::Progn { n } => {
             let mut sets = pop_n(vals, n);
             // Last arg evaluated last → its result is on top (end of sets)
@@ -816,15 +907,15 @@ pub(crate) fn apply_frame(
                     if arg_options.iter().any(|values| values.is_empty()) {
                         return Err("argument produced no results".to_string());
                     }
-                    let combos = cartesian_product(&arg_options);
                     let mut results = Vec::new();
                     let mut last_err = None;
-                    for slice in &combos {
+                    let mut buf = Vec::new();
+                    cartesian_product_apply(&arg_options, &mut buf, &mut |slice: &[Atom]| {
                         match f(slice, funcs) {
-                            Ok(nd) => results.extend(nd),
-                            Err(err) => last_err = Some(err),
+                            Ok(nd) => { results.extend(nd); Ok::<(), String>(()) }
+                            Err(err) => { last_err = Some(err); Ok(()) }
                         }
-                    }
+                    })?;
                     if results.is_empty() {
                         if let Some(err) = last_err {
                             return Err(err);
@@ -844,6 +935,19 @@ pub(crate) fn apply_frame(
                         vals.push(Vec::new());
                         return Ok(());
                     }
+                    // Memo check: pure + single-combo only.
+                    let memo_key = if funcs.is_pure_fn(&name, arity as u8)
+                        && combos_with_envs.len() == 1
+                    {
+                        let k = (name.to_string(), combos_with_envs[0].0.clone());
+                        if let Some(cached) = funcs.memo_get(&k) {
+                            vals.push(plain(cached));
+                            return Ok(());
+                        }
+                        Some(k)
+                    } else {
+                        None
+                    };
                     let mut bodies: Vec<(Arc<Expr>, Env, i64)> = Vec::new();
                     for (combo, combo_env) in &combos_with_envs {
                         for (patterns, body) in &clauses {
@@ -867,6 +971,28 @@ pub(crate) fn apply_frame(
                     if bodies.is_empty() {
                         vals.push(plain(Vec::new()));
                         return Ok(());
+                    }
+                    // Parallel path: pure/SpaceRead functions with multiple matched bodies.
+                    if bodies.len() > 1 && funcs.is_parallelizable(&name, arity as u8) {
+                        let merged: Vec<Atom> = bodies
+                            .into_par_iter()
+                            .map(|(body, body_env, _)| {
+                                super::step::run_rs(body, body_env, funcs, &mut None)
+                                    .map(|rs| rs.into_iter().map(|(a, _)| a).collect::<Vec<_>>())
+                            })
+                            .collect::<Result<Vec<_>, _>>()?
+                            .into_iter()
+                            .flatten()
+                            .collect();
+                        if let Some(key) = memo_key {
+                            funcs.memo_set(key, merged.clone());
+                        }
+                        vals.push(plain(merged));
+                        return Ok(());
+                    }
+                    // Sequential path: impure or single-body.
+                    if let Some(key) = memo_key {
+                        work.push(Task::Apply(Frame::MemoStore { key }));
                     }
                     work.push(Task::Apply(Frame::Gather { n: bodies.len() }));
                     for (body, body_env, _) in bodies.into_iter().rev() {

@@ -6,6 +6,7 @@
 use crate::atom::Atom;
 use crate::env::Env;
 use crate::func::{Clause, FnTable};
+use std::sync::Arc;
 use crate::parser::Expr;
 
 /// Match a clause's argument patterns against evaluated argument atoms.
@@ -73,12 +74,12 @@ pub(crate) fn try_match_one(
             Atom::Sym(var_name) if var_name.starts_with('$') => {
                 let key: &str = var_name.as_ref();
                 match crate::eval::shared::env::lookup(env, key) {
-                    Some(bound) if Atom::Num(*number) == bound => Ok(Some(env.clone())),
+                    Some(bound) if Atom::Num(number.clone()) == bound => Ok(Some(env.clone())),
                     Some(_) => Ok(None),
                     None => Ok(Some(crate::eval::shared::env::bind(
                         env,
                         key,
-                        Atom::Num(*number),
+                        Atom::Num(number.clone()),
                     ))),
                 }
             }
@@ -117,7 +118,7 @@ pub(crate) fn try_match_one(
                         else {
                             return Ok(None);
                         };
-                        let tail = Atom::Expr(elements[1..].to_vec());
+                        let tail = Atom::Expr(Arc::from(&elements[1..]));
                         try_match_one(&items[2], &tail, &head_env, funcs)
                     }
                     _ => Ok(None),

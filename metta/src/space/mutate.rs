@@ -20,7 +20,7 @@ pub struct TransactionSnapshot {
     /// Cached user clause lookup results.
     pub fn_cache: HashMap<String, HashMap<u8, Vec<crate::func::Clause>>>,
     /// Cached function purity results.
-    pub fn_purity: HashMap<String, HashMap<u8, bool>>,
+    pub fn_effect: HashMap<String, HashMap<u8, crate::func::Effect>>,
 }
 
 /// Add an atom to a resolved space.
@@ -28,6 +28,7 @@ pub struct TransactionSnapshot {
 /// so they can be found by the fast dispatch path.
 pub fn add_atom(funcs: &FnTable, space_ref: &Atom, atom: &Atom) -> Result<(), String> {
     funcs.with_resolved_space(space_ref, |space| space.add_atom(atom))?;
+    funcs.bump_memo_stamp();
     if matches!(space_ref, Atom::Sym(name) if name.as_ref() == "&self") {
         maybe_cache_definition_atom(atom, funcs);
         // Also store bare head atom for match premise lookup
@@ -43,6 +44,9 @@ pub fn add_atom(funcs: &FnTable, space_ref: &Atom, atom: &Atom) -> Result<(), St
 /// and bare head shadow atoms.
 pub fn remove_atom(funcs: &FnTable, space_ref: &Atom, atom: &Atom) -> Result<bool, String> {
     let removed = funcs.with_resolved_space(space_ref, |space| space.remove_atom(atom))?;
+    if removed {
+        funcs.bump_memo_stamp();
+    }
     if removed && matches!(space_ref, Atom::Sym(name) if name.as_ref() == "&self") {
         maybe_uncache_definition_atom(atom, funcs);
         // Only remove head shadow if no other definition with same head remains
@@ -120,21 +124,21 @@ pub fn snapshot_transaction_state(funcs: &FnTable) -> TransactionSnapshot {
     let self_atoms = funcs.space.read().unwrap().get_atoms();
     let named_space_atoms = funcs
         .named_spaces
-        .lock()
+        .read()
         .unwrap()
         .iter()
         .map(|(name, space)| (name.clone(), space.get_atoms()))
         .collect();
     let state = funcs.state.lock().unwrap().clone();
     let fn_cache = funcs.fn_cache.read().unwrap().clone();
-    let fn_purity = funcs.fn_purity.read().unwrap().clone();
+    let fn_effect = funcs.fn_effect.read().unwrap().clone();
 
     TransactionSnapshot {
         self_atoms,
         named_space_atoms,
         state,
         fn_cache,
-        fn_purity,
+        fn_effect,
     }
 }
 
@@ -158,7 +162,7 @@ pub fn restore_transaction_state(
         named_space_atoms,
         state,
         fn_cache,
-        fn_purity,
+        fn_effect,
     } = snapshot;
 
     *funcs.space.write().unwrap() = rebuild_space(&self_atoms)?;
@@ -167,9 +171,9 @@ pub fn restore_transaction_state(
     for (name, atoms) in named_space_atoms {
         named_spaces.insert(name, rebuild_space(&atoms)?);
     }
-    *funcs.named_spaces.lock().unwrap() = named_spaces;
+    *funcs.named_spaces.write().unwrap() = named_spaces;
     *funcs.state.lock().unwrap() = state;
     *funcs.fn_cache.write().unwrap() = fn_cache;
-    *funcs.fn_purity.write().unwrap() = fn_purity;
+    *funcs.fn_effect.write().unwrap() = fn_effect;
     Ok(())
 }

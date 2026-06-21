@@ -71,7 +71,7 @@ pub(crate) const VARS: [u64; 4] = {
     let nv_byte = item_byte(Tag::NewVar);
     ret[((nv_byte & 0b11000000) >> 6) as usize] |= 1u64 << (nv_byte & 0b00111111);
     let mut size = 0;
-    while size < 64 {
+    while size < 63 {
         let k = item_byte(Tag::VarRef(size));
         ret[((k & 0b11000000) >> 6) as usize] |= 1u64 << (k & 0b00111111);
         size += 1;
@@ -161,6 +161,26 @@ fn coreferential_transition<Z : ZipperMoving + Zipper + ZipperAbsolutePath + Zip
                     }
 
                     if e.n == 0 { references.pop(); }
+                }
+                Tag::LongVarRef => {
+                    let i = *e.base.ptr.byte_add(e.offset as usize + 1) as usize;
+                    let addition = if e.n == 0 {
+                        if i >= references.len() {
+                            trace!(target: "coref trans", "i {i} #references {}", references.len());
+                            stack.push(e);
+                            return;
+                        }
+                        trace!(target: "coref trans", "varref {i} at {} pushing {}", references[i], serialize(&loc.path()[references[i] as usize..]));
+                        ExprEnv{ n: 254, v: 0, offset: 0, base: Expr{ ptr: loc.path().as_ptr().cast_mut().offset(references[i] as _) } }
+                    } else {
+                        trace!(target: "coref trans", "varref <{},{i}> 'any'", e.n);
+                        static nv: u8 = item_byte(Tag::NewVar);
+                        ExprEnv{ n: 255, v: 0, offset: 0, base: Expr{ ptr: ((&nv) as *const u8).cast_mut() } }
+                    };
+                    stack.push(addition);
+                    vs!(e, false);
+                    coreferential_transition(loc, stack, references, f);
+                    stack.pop();
                 }
                 Tag::VarRef(i) => {
                     // let addition = if e.n == 0 && references[i as usize] != u32::MAX {

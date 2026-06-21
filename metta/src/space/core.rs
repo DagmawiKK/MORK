@@ -6,6 +6,7 @@
 
 use crate::atom::Atom;
 use crate::parser::Expr;
+use std::sync::Arc;
 
 use pathmap::zipper::{ZipperAbsolutePath, ZipperIteration, ZipperMoving};
 
@@ -26,7 +27,7 @@ impl Pattern {
                 .iter()
                 .map(|p| p.as_ground_atom())
                 .collect::<Option<Vec<_>>>()
-                .map(Atom::Expr),
+                .map(|v| Atom::Expr(v.into())),
         }
     }
 
@@ -35,7 +36,7 @@ impl Pattern {
             Expr::Symbol(s) if s.starts_with('$') => Pattern::Var(s.clone()),
             Expr::Symbol(s) => Pattern::Exact(Atom::sym(s)),
             Expr::Str(s) => Pattern::Exact(Atom::str_val(s)),
-            Expr::Number(n) => Pattern::Exact(Atom::Num(*n)),
+            Expr::Number(n) => Pattern::Exact(Atom::Num(n.clone())),
             Expr::List(items) => Pattern::Expr(items.iter().map(Self::from_expr).collect()),
         }
     }
@@ -64,16 +65,30 @@ pub trait Space: Send + Sync {
     fn description(&self) -> &str;
 }
 
+// Per-thread encode buffer. Avoids a shared lock during the encode phase so
+// multiple threads can each parse queries without contending on a single buffer.
+thread_local! {
+    static ENCODE_BUF: std::cell::RefCell<Vec<u8>> =
+        std::cell::RefCell::new(vec![0u8; 1 << 16]);
+}
+
+// Per-thread encode buffer: each thread encodes its own query pattern without
+// contending on a shared buffer, while the trie itself is read concurrently.
+thread_local! {
+    static MORK_SPACE_ENCODE_BUF: std::cell::RefCell<Vec<u8>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 pub struct MorkSpace {
-    inner: std::sync::Mutex<mork::space::Space<mork::weightedsweep::UnitHeader>>,
-    encode_buf: std::sync::Mutex<Vec<u8>>,
+    /// RwLock: ArenaCompactTree is now Sync (Cell moved to zipper), so concurrent
+    /// reads are safe. Only add_atom/remove_atom take the write lock.
+    inner: std::sync::RwLock<mork::space::Space<mork::weightedsweep::UnitHeader>>,
 }
 
 impl MorkSpace {
     pub fn new() -> Self {
         MorkSpace {
-            inner: std::sync::Mutex::new(mork::space::Space::new()),
-            encode_buf: std::sync::Mutex::new(vec![0u8; 1 << 16]),
+            inner: std::sync::RwLock::new(mork::space::Space::new()),
         }
     }
 
@@ -100,52 +115,66 @@ impl MorkSpace {
 impl Space for MorkSpace {
     fn add_atom(&self, atom: &Atom) -> Result<(), String> {
         let sexpr = atom.to_sexpr_string();
-        let mut buf = self.encode_buf.lock().unwrap();
-        let mut inner = self.inner.lock().unwrap();
-        let len = Self::encode_into(&mut buf, &mut inner, &sexpr)?;
-        inner.btm.insert(&buf[..len], Default::default());
-        Ok(())
+        MORK_SPACE_ENCODE_BUF.with(|cell| {
+            let mut buf = cell.borrow_mut();
+            let mut inner = self.inner.write().unwrap();
+            let len = Self::encode_into(&mut buf, &mut inner, &sexpr)?;
+            inner.btm.insert(&buf[..len], Default::default());
+            Ok(())
+        })
     }
 
     fn remove_atom(&self, atom: &Atom) -> Result<bool, String> {
         let sexpr = atom.to_sexpr_string();
-        let mut buf = self.encode_buf.lock().unwrap();
-        let mut inner = self.inner.lock().unwrap();
-        let len = Self::encode_into(&mut buf, &mut inner, &sexpr)?;
-        Ok(inner.btm.remove(&buf[..len]).is_some())
+        MORK_SPACE_ENCODE_BUF.with(|cell| {
+            let mut buf = cell.borrow_mut();
+            let mut inner = self.inner.write().unwrap();
+            let len = Self::encode_into(&mut buf, &mut inner, &sexpr)?;
+            Ok(inner.btm.remove(&buf[..len]).is_some())
+        })
     }
 
     fn match_atoms(&self, pattern: &Pattern) -> Vec<MatchResult> {
         if let Some(atom) = pattern.as_ground_atom() {
             let sexpr = atom.to_sexpr_string();
-            let mut buf = self.encode_buf.lock().unwrap();
-            let mut inner = self.inner.lock().unwrap();
-            let len = match Self::encode_into(&mut buf, &mut inner, &sexpr) {
-                Ok(l) => l,
-                Err(_) => return vec![],
-            };
-            return if inner.btm.get_val_at(&buf[..len]).is_some() {
-                vec![MatchResult {
-                    atom,
-                    bindings: vec![],
-                }]
+            // Phase 1: encode (write lock, parse_sexpr needs &mut Space).
+            let encoded: Vec<u8> = MORK_SPACE_ENCODE_BUF.with(|cell| {
+                let mut buf = cell.borrow_mut();
+                let mut inner = self.inner.write().unwrap();
+                match Self::encode_into(&mut buf, &mut inner, &sexpr) {
+                    Ok(len) => buf[..len].to_vec(),
+                    Err(_) => vec![],
+                }
+            });
+            if encoded.is_empty() { return vec![]; }
+            // Phase 2: lookup (read lock, concurrent with other readers).
+            let inner = self.inner.read().unwrap();
+            return if inner.btm.get_val_at(&encoded).is_some() {
+                vec![MatchResult { atom, bindings: vec![] }]
             } else {
                 vec![]
             };
         }
 
         let query_sexpr = pattern_to_query_sexpr(pattern);
-        let mut buf = self.encode_buf.lock().unwrap();
-        let mut inner = self.inner.lock().unwrap();
-        let prefix: &[u8] = match inner.parse_sexpr(query_sexpr.as_bytes(), buf.as_mut_ptr()) {
-            Ok((e, _len)) => match e.prefix() {
-                Ok(p) | Err(p) => unsafe { &*p },
-            },
-            Err(_) => &[],
-        };
+        // Phase 1: encode prefix (write lock, short duration).
+        let prefix_bytes: Vec<u8> = MORK_SPACE_ENCODE_BUF.with(|cell| {
+            let mut buf = cell.borrow_mut();
+            let cap = query_sexpr.len() * 8 + 64;
+            if cap > buf.len() { buf.resize(cap, 0); }
+            let mut inner = self.inner.write().unwrap();
+            match inner.parse_sexpr(query_sexpr.as_bytes(), buf.as_mut_ptr()) {
+                Ok((e, _len)) => match e.prefix() {
+                    Ok(p) | Err(p) => unsafe { &*p }.to_vec(),
+                },
+                Err(_) => vec![],
+            }
+        });
 
+        // Phase 2: traverse (read lock — concurrent with other readers).
+        let inner = self.inner.read().unwrap();
         let mut results = Vec::new();
-        let mut z = inner.btm.read_zipper_at_path(prefix);
+        let mut z = inner.btm.read_zipper_at_path(&prefix_bytes);
         while z.to_next_val() {
             if let Some(stored) = decode_expr_bytes(z.origin_path()) {
                 if let Some(mr) = match_one(pattern, &stored) {
@@ -154,7 +183,7 @@ impl Space for MorkSpace {
             }
         }
 
-        if results.is_empty() && !prefix.is_empty() {
+        if results.is_empty() && !prefix_bytes.is_empty() {
             let mut z = inner.btm.read_zipper();
             while z.to_next_val() {
                 if let Some(stored) = decode_expr_bytes(z.origin_path()) {
@@ -169,7 +198,7 @@ impl Space for MorkSpace {
     }
 
     fn get_atoms(&self) -> Vec<Atom> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         let mut out = Vec::new();
         let mut z = inner.btm.read_zipper();
         while z.to_next_val() {
@@ -217,8 +246,8 @@ fn varname(i: u8) -> Atom {
 fn symbol_to_atom(s: &str) -> Atom {
     let digits = s.strip_prefix('-').unwrap_or(s);
     if !digits.is_empty() && digits.bytes().all(|c| c.is_ascii_digit()) {
-        if let Ok(n) = s.parse::<i128>() {
-            return Atom::Num(n);
+        if let Ok(n) = s.parse::<dashu::Integer>() {
+            return Atom::Num(crate::atom::Numeric::Int(n));
         }
     }
     Atom::sym(s)
@@ -267,7 +296,7 @@ fn decode_children(b: &[u8], pos: &mut usize, var_count: &mut u8, n: usize) -> O
     for _ in 0..n {
         items.push(decode_one(b, pos, var_count)?);
     }
-    Some(Atom::Expr(items))
+    Some(Atom::Expr(items.into()))
 }
 
 fn match_one(pattern: &Pattern, atom: &Atom) -> Option<MatchResult> {
@@ -342,7 +371,8 @@ fn substitute_stored(atom: &Atom, bindings: &[(String, Atom)]) -> Atom {
             items
                 .iter()
                 .map(|a| substitute_stored(a, bindings))
-                .collect(),
+                .collect::<Vec<_>>()
+                .into(),
         ),
         _ => atom.clone(),
     }
@@ -398,7 +428,7 @@ fn parse_value(chars: &[char], pos: &mut usize) -> Result<Atom, String> {
                 }
                 if chars[*pos] == ')' {
                     *pos += 1;
-                    return Ok(Atom::Expr(items));
+                    return Ok(Atom::Expr(items.into()));
                 }
                 items.push(parse_value(chars, pos)?);
             }
@@ -425,10 +455,10 @@ fn parse_value(chars: &[char], pos: &mut usize) -> Result<Atom, String> {
                 *pos += 1;
             }
             let num_str: String = chars[start..*pos].iter().collect();
-            let n: i128 = num_str
+            let n: dashu::Integer = num_str
                 .parse()
                 .map_err(|_| format!("invalid number: {}", num_str))?;
-            Ok(Atom::Num(n))
+            Ok(Atom::Num(crate::atom::Numeric::Int(n)))
         }
         c if c.is_alphanumeric() || "$!?<>=+-*/_".contains(c) => {
             let start = *pos;
