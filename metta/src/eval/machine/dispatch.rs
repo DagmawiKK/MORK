@@ -180,12 +180,26 @@ pub(crate) fn dispatch_expr(
                                     }
                                 }
                             }
-                            other => (other.clone(), env.clone()),
+                            other => {
+                                let substituted = crate::eval::shared::subst::subst_expr_vars(other, env);
+                                (substituted, env.clone())
+                            }
                         };
                         work.push(Task::Eval {
                             expr: Arc::new(target),
                             env: tenv,
                         });
+                        return Ok(());
+                    }
+                    "lambda" => {
+                        if args.len() != 2 {
+                            return Err(format!("lambda: expected 2 args, got {}", args.len()));
+                        }
+                        vals.push(plain(vec![crate::atom::Atom::Expr(vec![
+                            crate::atom::Atom::sym("lambda"),
+                            crate::eval::shared::subst::subst_and_atomize(&args[0], env),
+                            crate::eval::shared::subst::subst_and_atomize(&args[1], env),
+                        ])]));
                         return Ok(());
                     }
                     "|->" => {
@@ -636,31 +650,51 @@ pub(crate) fn dispatch_expr(
                 }
             }
 
-            // Head is a $var bound to a closure — apply it as a user function
+            // Head is a $var — look up the binding and apply it
             if let Expr::Symbol(head_sym) = &items[0] {
                 if head_sym.starts_with('$') {
-                    if let Some(crate::atom::Atom::Closure(c)) =
-                        crate::eval::shared::env::lookup(env, head_sym.as_str())
-                    {
-                        let n_args = items.len() - 1;
-                        let call_args = &items[1..];
-                        work.push(Task::Apply(Frame::Call {
-                            head: Head::User {
-                                name: head_sym.clone(),
-                                clauses: vec![(c.params.clone(), c.body.clone())],
-                                lazy_mask: vec![false; n_args],
-                            },
-                            arity: n_args,
-                            env: c.env.clone(),
-                            prebound_args: None,
-                        }));
-                        for arg in call_args.iter().rev() {
-                            work.push(Task::Eval {
-                                expr: Arc::new(arg.clone()),
-                                env: env.clone(),
-                            });
+                    if let Some(atom) = crate::eval::shared::env::lookup(env, head_sym.as_str()) {
+                        match atom {
+                            crate::atom::Atom::Closure(c) => {
+                                let n_args = items.len() - 1;
+                                let call_args = &items[1..];
+                                work.push(Task::Apply(Frame::Call {
+                                    head: Head::User {
+                                        name: head_sym.clone(),
+                                        clauses: vec![(c.params.clone(), c.body.clone())],
+                                        lazy_mask: vec![false; n_args],
+                                    },
+                                    arity: n_args,
+                                    env: c.env.clone(),
+                                    prebound_args: None,
+                                }));
+                                for arg in call_args.iter().rev() {
+                                    work.push(Task::Eval {
+                                        expr: Arc::new(arg.clone()),
+                                        env: env.clone(),
+                                    });
+                                }
+                                return Ok(());
+                            }
+                            _ => {
+                                let n_args = items.len() - 1;
+                                work.push(Task::Apply(Frame::ApplyHead {
+                                    arity: n_args,
+                                    env: env.clone(),
+                                }));
+                                work.push(Task::Eval {
+                                    expr: Arc::new(items[0].clone()),
+                                    env: env.clone(),
+                                });
+                                for arg in items[1..].iter().rev() {
+                                    work.push(Task::Eval {
+                                        expr: Arc::new(arg.clone()),
+                                        env: env.clone(),
+                                    });
+                                }
+                                return Ok(());
+                            }
                         }
-                        return Ok(());
                     }
                 }
             }
