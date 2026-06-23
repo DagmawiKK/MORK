@@ -28,6 +28,68 @@ pub(crate) fn push_unary(
     Ok(())
 }
 
+/// Race each `hyperpose` branch on its own thread, returning the result set of
+/// the first branch to finish with a non-empty result. A shared cancellation
+/// flag tells the losing branches to stop, so `std::thread::scope` joins
+/// promptly instead of blocking on long-running siblings.
+fn race_hyperpose(
+    elems: &[Expr],
+    env: &Env,
+    funcs: &FnTable,
+) -> Result<super::budget::ResultSet, String> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+
+    let n = elems.len();
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+
+    let (winner, first_err) = std::thread::scope(|scope| {
+        for elem in elems {
+            let tx = tx.clone();
+            let cancel = Arc::clone(&cancel);
+            let env = env.clone();
+            let expr = Arc::new(elem.clone());
+            scope.spawn(move || {
+                super::step::set_cancel(Some(cancel));
+                let _ = tx.send(super::step::run_rs(expr, env, funcs, &mut None));
+            });
+        }
+        drop(tx); // so `recv` returns Err once every branch has reported
+
+        let mut winner: super::budget::ResultSet = Vec::new();
+        let mut first_err: Option<String> = None;
+        while let Ok(result) = rx.recv() {
+            match result {
+                Ok(rs) => {
+                    if let Some(pair) = rs.into_iter().next() {
+                        winner = vec![pair];
+                        cancel.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                }
+            }
+        }
+        (winner, first_err)
+    });
+
+    if winner.is_empty() {
+        if let Some(e) = first_err {
+            return Err(e);
+        }
+    }
+    Ok(winner)
+}
+
 /// Dispatch an `if` form by evaluating its condition with full env tracking
 /// and threading discovered bindings into branch environments.
 pub(crate) fn dispatch_if(args: &[Expr], env: &Env, funcs: &FnTable, work: &mut Vec<Task>) -> Result<(), String> {
@@ -387,10 +449,28 @@ pub(crate) fn dispatch_expr(
                     "collapse" => {
                         return push_unary("collapse", args, env, work, Frame::CollapseGather)
                     }
-                    "once" => return push_unary("once", args, env, work, Frame::OnceCut),
-                    "superpose" => {
+                    "once" => {
                         if args.len() != 1 {
-                            return Err(format!("superpose: expected 1 arg, got {}", args.len()));
+                            return Err(format!("once: expected 1 arg, got {}", args.len()));
+                        }
+                        // `(once (hyperpose (...)))`: race branches on real threads and
+                        // keep the first to finish, cancelling the rest — so a cheap
+                        // branch wins instead of waiting on long-running siblings.
+                        if let Expr::List(inner) = &args[0] {
+                            if inner.len() == 2 {
+                                if let (Expr::Symbol(h), Expr::List(elems)) = (&inner[0], &inner[1]) {
+                                    if h == "hyperpose" {
+                                        vals.push(race_hyperpose(elems, env, funcs)?);
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        }
+                        return push_unary("once", args, env, work, Frame::OnceCut);
+                    }
+                    "superpose" | "hyperpose" => {
+                        if args.len() != 1 {
+                            return Err(format!("{head}: expected 1 arg, got {}", args.len()));
                         }
                         if let Expr::List(elems) = &args[0] {
                             let n = elems.len();
