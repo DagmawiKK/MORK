@@ -8,7 +8,21 @@ use crate::atom::Atom;
 use crate::env::Env;
 use crate::func::{FnTable, NDet};
 use crate::parser::Expr;
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+thread_local! {
+    /// Per-thread cancellation flag. When set and raised, `run_rs` on this
+    /// thread bails out early. Installed by the `(once (hyperpose ...))` racing
+    /// path so losing branches stop instead of running to the bitter end.
+    static CANCEL: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+}
+
+/// Install (or clear) the cancellation flag for the current thread.
+pub(crate) fn set_cancel(flag: Option<Arc<AtomicBool>>) {
+    CANCEL.with(|c| *c.borrow_mut() = flag);
+}
 
 /// Evaluate an expression to a nondeterministic result stream.
 pub fn run_as_ndet(expr: &Expr, env: &Env, funcs: &FnTable) -> Result<NDet, String> {
@@ -45,7 +59,18 @@ pub(crate) fn run_rs(
     work.push(super::task::Task::Eval { expr: root, env: root_env });
     let mut vals: Vec<ResultSet> = Vec::with_capacity(32);
 
+    // Snapshot the thread's cancellation flag once; polled on a stride so the
+    // hot loop pays nothing when no flag is installed (the common case).
+    let cancel = CANCEL.with(|c| c.borrow().clone());
+    let mut steps: u32 = 0;
+
     while let Some(task) = work.pop() {
+        if let Some(flag) = &cancel {
+            steps = steps.wrapping_add(1);
+            if steps & 0x3ff == 0 && flag.load(Ordering::Relaxed) {
+                return Ok(Vec::new());
+            }
+        }
         match task {
             super::task::Task::Eval { expr, env } => {
                 super::dispatch::dispatch_expr(&expr, &env, funcs, &mut work, &mut vals)?;
