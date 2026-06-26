@@ -748,7 +748,7 @@ pub fn run_vm(
                 // Pop expression results (evaluated first)
                 let expr_rs = state.stack.pop().ok_or("VM stack underflow on Test expr")?;
 
-                // Collect ALL atoms from the expression result set (like PeTTa's findall)
+                // Collect ALL atoms from the expression result set
                 // substitute environments to resolve variables before comparison
                 let expr_atoms: Vec<Atom> = expr_rs.into_iter().map(|(a, env)| crate::eval::shared::subst::subst_atom(&a, &env)).collect();
 
@@ -1273,47 +1273,128 @@ pub fn run_vm(
             } => {
                 // MapAtomLambda maps list elements using a precompiled lambda body code for high performance
                 let list_rs = state.stack.pop().ok_or("VM stack underflow on MapAtomLambda")?;
-                // substitute env to resolve variables in list argument
-                let items: Vec<Atom> = match list_rs.into_iter().next().map(|(a, env)| crate::eval::shared::subst::subst_atom(&a, &env)) {
-                    Some(Atom::Expr(v)) => v.to_vec(),
-                    Some(other) => vec![other],
-                    None => return Err("map-atom: list arg produced no result".to_string()),
-                };
+                let mut final_results = Vec::new();
+                for (list_atom, list_env) in list_rs {
+                    let substituted = crate::eval::shared::subst::subst_atom(&list_atom, &list_env);
+                    let items: Vec<Atom> = match substituted {
+                        Atom::Expr(v) => v.to_vec(),
+                        other => vec![other],
+                    };
 
-                let mut mapped_results = Vec::with_capacity(items.len());
-                for elem in items {
-                    let mut sub_state = VMState::new_with_parent(
-                        body_code.clone(),
-                        free_vars_map.clone(),
-                        state.budget,
-                        &state.free_vars_map,
-                        &state.free_vars_bindings,
-                    );
-                    for val in &state.locals {
-                        sub_state.locals.push(val.clone());
+                    // optimize Cartesian product for the common case (deterministic result stream)
+                    enum Comb {
+                        Single(Vec<Atom>, Env),
+                        Multi(Vec<(Vec<Atom>, Env)>),
                     }
-                    sub_state.locals.push((elem.clone(), Env::new()));
-                    
-                    let sub_env = base_env.extend(&var_name, elem.clone());
-                    let (res, sub_budget, exit_status) = run_vm(sub_state, funcs, &sub_env)?;
-                    state.budget = sub_budget;
-                    
-                    // substitute env for mapped item
-                    if let Some((val, env)) = res.into_iter().next() {
-                        mapped_results.push(crate::eval::shared::subst::subst_atom(&val, &env));
-                    }
-                    match exit_status {
-                        VmExit::Cut => {
-                            state.cut_executed = true;
+                    let mut comb = Comb::Single(Vec::with_capacity(items.len()), Env::new());
+                    let mut cut_received = false;
+                    let mut tail_call_received = None;
+
+                    for elem in items {
+                        let mut sub_state = VMState::new_with_parent(
+                            body_code.clone(),
+                            free_vars_map.clone(),
+                            state.budget,
+                            &state.free_vars_map,
+                            &state.free_vars_bindings,
+                        );
+                        for val in &state.locals {
+                            sub_state.locals.push(val.clone());
+                        }
+                        sub_state.locals.push((elem.clone(), Env::new()));
+                        
+                        let sub_env = base_env.extend(&var_name, elem.clone());
+                        let (res, sub_budget, exit_status) = run_vm(sub_state, funcs, &sub_env)?;
+                        state.budget = sub_budget;
+                        
+                        if res.is_empty() {
+                            comb = Comb::Multi(Vec::new());
                             break;
                         }
-                        VmExit::TailCall(new_locals) => {
-                            return Ok((plain(vec![Atom::Expr(crate::atom::expr_data(mapped_results))]), state.budget, VmExit::TailCall(new_locals)));
+
+                        let next_comb = match comb {
+                            Comb::Single(mut single_list, mut single_env) => {
+                                if res.len() == 1 {
+                                    let (val, env) = &res[0];
+                                    single_list.push(crate::eval::shared::subst::subst_atom(val, env));
+                                    if !env.is_empty_env() {
+                                        single_env = crate::eval::shared::env::prepend_chain(env.clone(), &single_env);
+                                    }
+                                    Comb::Single(single_list, single_env)
+                                } else {
+                                    let mut multi = Vec::new();
+                                    for (val, env) in res {
+                                        let mut next_list = single_list.clone();
+                                        next_list.push(crate::eval::shared::subst::subst_atom(&val, &env));
+                                        let next_env = crate::eval::shared::env::prepend_chain(env, &single_env);
+                                        multi.push((next_list, next_env));
+                                    }
+                                    Comb::Multi(multi)
+                                }
+                            }
+                            Comb::Multi(mut multi_lists) => {
+                                if res.len() == 1 {
+                                    let (val, env) = &res[0];
+                                    for (prev_list, prev_env) in &mut multi_lists {
+                                        prev_list.push(crate::eval::shared::subst::subst_atom(val, env));
+                                        if !env.is_empty_env() {
+                                            *prev_env = crate::eval::shared::env::prepend_chain(env.clone(), prev_env);
+                                        }
+                                    }
+                                    Comb::Multi(multi_lists)
+                                } else {
+                                    let mut next_multi = Vec::new();
+                                    for (prev_list, prev_env) in &multi_lists {
+                                        for (choice_val, choice_env) in &res {
+                                            let mut next_list = prev_list.clone();
+                                            next_list.push(crate::eval::shared::subst::subst_atom(choice_val, choice_env));
+                                            let next_env = crate::eval::shared::env::prepend_chain(choice_env.clone(), prev_env);
+                                            next_multi.push((next_list, next_env));
+                                        }
+                                    }
+                                    Comb::Multi(next_multi)
+                                }
+                            }
+                        };
+                        comb = next_comb;
+
+                        match exit_status {
+                            VmExit::Cut => {
+                                cut_received = true;
+                                break;
+                            }
+                            VmExit::TailCall(new_locals) => {
+                                tail_call_received = Some(new_locals);
+                                break;
+                            }
+                            VmExit::Normal => {}
                         }
-                        VmExit::Normal => {}
+                    }
+
+                    match comb {
+                        Comb::Single(mapped_list, mapped_env) => {
+                            let env1 = crate::eval::shared::env::prepend_chain(mapped_env, &list_env);
+                            let env2 = crate::eval::shared::env::prepend_chain(env1, &base_env);
+                            final_results.push((Atom::Expr(crate::atom::expr_data(mapped_list)), env2));
+                        }
+                        Comb::Multi(multi_lists) => {
+                            for (mapped_list, mapped_env) in multi_lists {
+                                let env1 = crate::eval::shared::env::prepend_chain(mapped_env, &list_env);
+                                let env2 = crate::eval::shared::env::prepend_chain(env1, &base_env);
+                                final_results.push((Atom::Expr(crate::atom::expr_data(mapped_list)), env2));
+                            }
+                        }
+                    }
+
+                    if cut_received {
+                        state.cut_executed = true;
+                        break;
+                    }
+                    if let Some(new_locals) = tail_call_received {
+                        return Ok((final_results, state.budget, VmExit::TailCall(new_locals)));
                     }
                 }
-                state.stack.push(plain(vec![Atom::Expr(crate::atom::expr_data(mapped_results))]));
+                state.stack.push(final_results);
                 state.ip += 1;
             }
             Opcode::FilterAtomLambda {
@@ -1323,48 +1404,62 @@ pub fn run_vm(
             } => {
                 // FilterAtomLambda filters list elements using a precompiled lambda condition code for high performance
                 let list_rs = state.stack.pop().ok_or("VM stack underflow on FilterAtomLambda")?;
-                // substitute env to resolve variables in list argument
-                let items: Vec<Atom> = match list_rs.into_iter().next().map(|(a, env)| crate::eval::shared::subst::subst_atom(&a, &env)) {
-                    Some(Atom::Expr(v)) => v.to_vec(),
-                    Some(other) => vec![other],
-                    None => return Err("filter-atom: list arg produced no result".to_string()),
-                };
+                let mut final_results = Vec::new();
+                for (list_atom, list_env) in list_rs {
+                    let substituted = crate::eval::shared::subst::subst_atom(&list_atom, &list_env);
+                    let items: Vec<Atom> = match substituted {
+                        Atom::Expr(v) => v.to_vec(),
+                        other => vec![other],
+                    };
 
-                let mut filtered_results = Vec::with_capacity(items.len());
-                for elem in items {
-                    let mut sub_state = VMState::new_with_parent(
-                        body_code.clone(),
-                        free_vars_map.clone(),
-                        state.budget,
-                        &state.free_vars_map,
-                        &state.free_vars_bindings,
-                    );
-                    for val in &state.locals {
-                        sub_state.locals.push(val.clone());
-                    }
-                    sub_state.locals.push((elem.clone(), Env::new()));
-                    
-                    let sub_env = base_env.extend(&var_name, elem.clone());
-                    let (res, sub_budget, exit_status) = run_vm(sub_state, funcs, &sub_env)?;
-                    state.budget = sub_budget;
-                    
-                    // substitute env
-                    let is_true = res.into_iter().next().map(|(a, env)| crate::eval::shared::subst::subst_atom(&a, &env).is_truthy()).unwrap_or(false);
-                    if is_true {
-                        filtered_results.push(elem);
-                    }
-                    match exit_status {
-                        VmExit::Cut => {
-                            state.cut_executed = true;
-                            break;
+                    let mut filtered_results = Vec::with_capacity(items.len());
+                    let mut cut_received = false;
+                    let mut tail_call_received = None;
+                    for elem in items {
+                        let mut sub_state = VMState::new_with_parent(
+                            body_code.clone(),
+                            free_vars_map.clone(),
+                            state.budget,
+                            &state.free_vars_map,
+                            &state.free_vars_bindings,
+                        );
+                        for val in &state.locals {
+                            sub_state.locals.push(val.clone());
                         }
-                        VmExit::TailCall(new_locals) => {
-                            return Ok((plain(vec![Atom::Expr(crate::atom::expr_data(filtered_results))]), state.budget, VmExit::TailCall(new_locals)));
+                        sub_state.locals.push((elem.clone(), Env::new()));
+                        
+                        let sub_env = base_env.extend(&var_name, elem.clone());
+                        let (res, sub_budget, exit_status) = run_vm(sub_state, funcs, &sub_env)?;
+                        state.budget = sub_budget;
+                        
+                        let is_true = res.into_iter().next().map(|(a, env)| crate::eval::shared::subst::subst_atom(&a, &env).is_truthy()).unwrap_or(false);
+                        if is_true {
+                            filtered_results.push(elem);
                         }
-                        VmExit::Normal => {}
+                        match exit_status {
+                            VmExit::Cut => {
+                                cut_received = true;
+                                break;
+                            }
+                            VmExit::TailCall(new_locals) => {
+                                tail_call_received = Some(new_locals);
+                                break;
+                            }
+                            VmExit::Normal => {}
+                        }
+                    }
+                    let merged_env = crate::eval::shared::env::prepend_chain(list_env.clone(), &base_env);
+                    final_results.push((Atom::Expr(crate::atom::expr_data(filtered_results)), merged_env));
+
+                    if cut_received {
+                        state.cut_executed = true;
+                        break;
+                    }
+                    if let Some(new_locals) = tail_call_received {
+                        return Ok((final_results, state.budget, VmExit::TailCall(new_locals)));
                     }
                 }
-                state.stack.push(plain(vec![Atom::Expr(crate::atom::expr_data(filtered_results))]));
+                state.stack.push(final_results);
                 state.ip += 1;
             }
             Opcode::Once { body_code, free_vars_map } => {
@@ -1738,53 +1833,137 @@ pub fn run_vm(
                 free_vars_map,
             } => {
                 let list_rs = state.stack.pop().ok_or("VM stack underflow on MapAtomPatternLambda")?;
-                // substitute env
-                let items: Vec<Atom> = match list_rs.into_iter().next().map(|(a, env)| crate::eval::shared::subst::subst_atom(&a, &env)) {
-                    Some(Atom::Expr(v)) => v.to_vec(),
-                    Some(other) => vec![other],
-                    None => return Err("map-atom: list arg produced no result".to_string()),
-                };
+                let mut final_results = Vec::new();
+                for (list_atom, list_env) in list_rs {
+                    let substituted = crate::eval::shared::subst::subst_atom(&list_atom, &list_env);
+                    let items: Vec<Atom> = match substituted {
+                        Atom::Expr(v) => v.to_vec(),
+                        other => vec![other],
+                    };
 
-                let mut mapped_results = Vec::with_capacity(items.len());
-                for elem in items {
-                    let matched = crate::eval::shared::pattern::try_match_one(
-                        pattern, &elem, &base_env, funcs,
-                    )?;
-                    if let Some(matched_env) = matched {
-                        let mut sub_state = VMState::new_with_parent(
-                            body_code.clone(),
-                            free_vars_map.clone(),
-                            state.budget,
-                            &state.free_vars_map,
-                            &state.free_vars_bindings,
-                        );
-                        for val in &state.locals {
-                            sub_state.locals.push(val.clone());
-                        }
-                        for var in pattern_vars {
-                            let bound = matched_env.get(var).unwrap_or(Atom::sym("()"));
-                            sub_state.locals.push((bound, Env::new()));
-                        }
-                        let (res, sub_budget, exit_status) = run_vm(sub_state, funcs, &matched_env)?;
-                        state.budget = sub_budget;
+                    // optimize Cartesian product for the common case (deterministic result stream)
+                    enum Comb {
+                        Single(Vec<Atom>, Env),
+                        Multi(Vec<(Vec<Atom>, Env)>),
+                    }
+                    let mut comb = Comb::Single(Vec::with_capacity(items.len()), Env::new());
+                    let mut cut_received = false;
+                    let mut tail_call_received = None;
 
-                        // substitute env
-                        if let Some((val, env)) = res.into_iter().next() {
-                            mapped_results.push(crate::eval::shared::subst::subst_atom(&val, &env));
-                        }
-                        match exit_status {
-                            VmExit::Cut => {
-                                state.cut_executed = true;
+                    for elem in items {
+                        let matched = crate::eval::shared::pattern::try_match_one(
+                            pattern, &elem, &base_env, funcs,
+                        )?;
+                        if let Some(matched_env) = matched {
+                            let mut sub_state = VMState::new_with_parent(
+                                body_code.clone(),
+                                free_vars_map.clone(),
+                                state.budget,
+                                &state.free_vars_map,
+                                &state.free_vars_bindings,
+                            );
+                            for val in &state.locals {
+                                sub_state.locals.push(val.clone());
+                            }
+                            for var in pattern_vars {
+                                let bound = matched_env.get(var).unwrap_or(Atom::sym("()"));
+                                sub_state.locals.push((bound, Env::new()));
+                            }
+                            let (res, sub_budget, exit_status) = run_vm(sub_state, funcs, &matched_env)?;
+                            state.budget = sub_budget;
+
+                            if res.is_empty() {
+                                comb = Comb::Multi(Vec::new());
                                 break;
                             }
-                            VmExit::TailCall(new_locals) => {
-                                return Ok((plain(vec![Atom::Expr(crate::atom::expr_data(mapped_results))]), state.budget, VmExit::TailCall(new_locals)));
+
+                            let next_comb = match comb {
+                                Comb::Single(mut single_list, mut single_env) => {
+                                    if res.len() == 1 {
+                                        let (val, env) = &res[0];
+                                        single_list.push(crate::eval::shared::subst::subst_atom(val, env));
+                                        if !env.is_empty_env() {
+                                            single_env = crate::eval::shared::env::prepend_chain(env.clone(), &single_env);
+                                        }
+                                        Comb::Single(single_list, single_env)
+                                    } else {
+                                        let mut multi = Vec::new();
+                                        for (val, env) in res {
+                                            let mut next_list = single_list.clone();
+                                            next_list.push(crate::eval::shared::subst::subst_atom(&val, &env));
+                                            let next_env = crate::eval::shared::env::prepend_chain(env, &single_env);
+                                            multi.push((next_list, next_env));
+                                        }
+                                        Comb::Multi(multi)
+                                    }
+                                }
+                                Comb::Multi(mut multi_lists) => {
+                                    if res.len() == 1 {
+                                        let (val, env) = &res[0];
+                                        for (prev_list, prev_env) in &mut multi_lists {
+                                            prev_list.push(crate::eval::shared::subst::subst_atom(val, env));
+                                            if !env.is_empty_env() {
+                                                *prev_env = crate::eval::shared::env::prepend_chain(env.clone(), prev_env);
+                                            }
+                                        }
+                                        Comb::Multi(multi_lists)
+                                    } else {
+                                        let mut next_multi = Vec::new();
+                                        for (prev_list, prev_env) in &multi_lists {
+                                            for (choice_val, choice_env) in &res {
+                                                let mut next_list = prev_list.clone();
+                                                next_list.push(crate::eval::shared::subst::subst_atom(choice_val, choice_env));
+                                                let next_env = crate::eval::shared::env::prepend_chain(choice_env.clone(), prev_env);
+                                                next_multi.push((next_list, next_env));
+                                            }
+                                        }
+                                        Comb::Multi(next_multi)
+                                    }
+                                }
+                            };
+                            comb = next_comb;
+
+                            match exit_status {
+                                VmExit::Cut => {
+                                    cut_received = true;
+                                    break;
+                                }
+                                VmExit::TailCall(new_locals) => {
+                                    tail_call_received = Some(new_locals);
+                                    break;
+                                }
+                                VmExit::Normal => {}
                             }
-                            VmExit::Normal => {}
+                        } else {
+                            comb = Comb::Multi(Vec::new());
+                            break;
                         }
                     }
+
+                    match comb {
+                        Comb::Single(mapped_list, mapped_env) => {
+                            let env1 = crate::eval::shared::env::prepend_chain(mapped_env, &list_env);
+                            let env2 = crate::eval::shared::env::prepend_chain(env1, &base_env);
+                            final_results.push((Atom::Expr(crate::atom::expr_data(mapped_list)), env2));
+                        }
+                        Comb::Multi(multi_lists) => {
+                            for (mapped_list, mapped_env) in multi_lists {
+                                let env1 = crate::eval::shared::env::prepend_chain(mapped_env, &list_env);
+                                let env2 = crate::eval::shared::env::prepend_chain(env1, &base_env);
+                                final_results.push((Atom::Expr(crate::atom::expr_data(mapped_list)), env2));
+                            }
+                        }
+                    }
+
+                    if cut_received {
+                        state.cut_executed = true;
+                        break;
+                    }
+                    if let Some(new_locals) = tail_call_received {
+                        return Ok((final_results, state.budget, VmExit::TailCall(new_locals)));
+                    }
                 }
-                state.stack.push(plain(vec![Atom::Expr(crate::atom::expr_data(mapped_results))]));
+                state.stack.push(final_results);
                 state.ip += 1;
             }
             Opcode::FilterAtomPatternLambda {
@@ -1794,54 +1973,68 @@ pub fn run_vm(
                 free_vars_map,
             } => {
                 let list_rs = state.stack.pop().ok_or("VM stack underflow on FilterAtomPatternLambda")?;
-                // substitute env
-                let items: Vec<Atom> = match list_rs.into_iter().next().map(|(a, env)| crate::eval::shared::subst::subst_atom(&a, &env)) {
-                    Some(Atom::Expr(v)) => v.to_vec(),
-                    Some(other) => vec![other],
-                    None => return Err("filter-atom: list arg produced no result".to_string()),
-                };
+                let mut final_results = Vec::new();
+                for (list_atom, list_env) in list_rs {
+                    let substituted = crate::eval::shared::subst::subst_atom(&list_atom, &list_env);
+                    let items: Vec<Atom> = match substituted {
+                        Atom::Expr(v) => v.to_vec(),
+                        other => vec![other],
+                    };
 
-                let mut filtered_results = Vec::with_capacity(items.len());
-                for elem in items {
-                    let matched = crate::eval::shared::pattern::try_match_one(
-                        pattern, &elem, &base_env, funcs,
-                    )?;
-                    if let Some(matched_env) = matched {
-                        let mut sub_state = VMState::new_with_parent(
-                            body_code.clone(),
-                            free_vars_map.clone(),
-                            state.budget,
-                            &state.free_vars_map,
-                            &state.free_vars_bindings,
-                        );
-                        for val in &state.locals {
-                            sub_state.locals.push(val.clone());
-                        }
-                        for var in pattern_vars {
-                            let bound = matched_env.get(var).unwrap_or(Atom::sym("()"));
-                            sub_state.locals.push((bound, Env::new()));
-                        }
-                        let (res, sub_budget, exit_status) = run_vm(sub_state, funcs, &matched_env)?;
-                        state.budget = sub_budget;
+                    let mut filtered_results = Vec::with_capacity(items.len());
+                    let mut cut_received = false;
+                    let mut tail_call_received = None;
+                    for elem in items {
+                        let matched = crate::eval::shared::pattern::try_match_one(
+                            pattern, &elem, &base_env, funcs,
+                        )?;
+                        if let Some(matched_env) = matched {
+                            let mut sub_state = VMState::new_with_parent(
+                                body_code.clone(),
+                                free_vars_map.clone(),
+                                state.budget,
+                                &state.free_vars_map,
+                                &state.free_vars_bindings,
+                            );
+                            for val in &state.locals {
+                                sub_state.locals.push(val.clone());
+                            }
+                            for var in pattern_vars {
+                                let bound = matched_env.get(var).unwrap_or(Atom::sym("()"));
+                                sub_state.locals.push((bound, Env::new()));
+                            }
+                            let (res, sub_budget, exit_status) = run_vm(sub_state, funcs, &matched_env)?;
+                            state.budget = sub_budget;
 
-                        // substitute env
-                        let is_true = res.into_iter().next().map(|(a, env)| crate::eval::shared::subst::subst_atom(&a, &env).is_truthy()).unwrap_or(false);
-                        if is_true {
-                            filtered_results.push(elem);
-                        }
-                        match exit_status {
-                            VmExit::Cut => {
-                                state.cut_executed = true;
-                                break;
+                            let is_true = res.into_iter().next().map(|(a, env)| crate::eval::shared::subst::subst_atom(&a, &env).is_truthy()).unwrap_or(false);
+                            if is_true {
+                                filtered_results.push(elem);
                             }
-                            VmExit::TailCall(new_locals) => {
-                                return Ok((plain(vec![Atom::Expr(crate::atom::expr_data(filtered_results))]), state.budget, VmExit::TailCall(new_locals)));
+                            match exit_status {
+                                VmExit::Cut => {
+                                    cut_received = true;
+                                    break;
+                                }
+                                VmExit::TailCall(new_locals) => {
+                                    tail_call_received = Some(new_locals);
+                                    break;
+                                }
+                                VmExit::Normal => {}
                             }
-                            VmExit::Normal => {}
                         }
                     }
+                    let merged_env = crate::eval::shared::env::prepend_chain(list_env.clone(), &base_env);
+                    final_results.push((Atom::Expr(crate::atom::expr_data(filtered_results)), merged_env));
+
+                    if cut_received {
+                        state.cut_executed = true;
+                        break;
+                    }
+                    if let Some(new_locals) = tail_call_received {
+                        return Ok((final_results, state.budget, VmExit::TailCall(new_locals)));
+                    }
                 }
-                state.stack.push(plain(vec![Atom::Expr(crate::atom::expr_data(filtered_results))]));
+                state.stack.push(final_results);
                 state.ip += 1;
             }
             Opcode::TailCallSelf => {
@@ -2369,7 +2562,6 @@ fn dispatch_call(
                     ]));
                     results.push((partial_atom, combo_env.clone()));
                 } else if has_clauses {
-                    // defined user function with no matching clauses under PeTTa semantics returns empty/fails
                 } else {
                     let mut items = vec![Atom::sym(fn_name)];
                     items.extend(args.to_vec());
@@ -2674,10 +2866,7 @@ fn run_next_case_iteration(state: &mut VMState, funcs: &FnTable) -> Result<Optio
                         if matches!(&branch.pattern, Expr::Symbol(s) if s == "Empty") {
                             continue;
                         }
-                        if matches!(&branch.pattern, Expr::Symbol(s) if s == "$else") {
-                            selected = Some((branch, value_env.clone()));
-                            break;
-                        }
+                        // unified $else pattern variables directly via try_match_one instead of special-casing it to bypass binding
                         if let Some(match_env) = crate::eval::shared::pattern::try_match_one(
                             &branch.pattern,
                             value,

@@ -472,57 +472,46 @@ pub fn register_collection_builtins(funcs: &FnTable) {
             other => vec![other.clone()],
         };
         let func_atom = &args[1];
-        let mut results = Vec::with_capacity(items.len());
-        match func_atom {
-            Atom::Sym(fname) => {
-                if let Some(function) = table.get(fname, 1) {
-                    if let crate::func::FunctionKind::Native { func } = &function.kind {
-                        for item in &items {
-                            let mut result = func(&[item.clone()], table)?;
-                            let val = result.next().ok_or_else(|| {
-                                format!("map-atom: function {} produced no result for item {}", fname, item.to_sexpr_string())
-                            })?;
-                            results.push(val);
+
+        // ponytail: helper to evaluate dynamic mapping function for a single item
+        let get_item_choices = |item: &Atom, table: &FnTable| -> Result<Vec<Atom>, String> {
+            match func_atom {
+                Atom::Sym(fname) => {
+                    if let Some(function) = table.get(fname, 1) {
+                        if let crate::func::FunctionKind::Native { func } = &function.kind {
+                            let result = func(&[item.clone()], table)?;
+                            return Ok(result.collect());
                         }
-                        return Ok(NDet::single(Atom::Expr(crate::atom::expr_data(results))));
                     }
-                }
-                // Fallback for user-defined functions
-                let fn_expr = crate::parser::atom_to_expr(&Atom::Sym(fname.clone()))
-                    .unwrap_or(crate::parser::Expr::Symbol(fname.to_string()));
-                for item in &items {
+                    let fn_expr = crate::parser::atom_to_expr(&Atom::Sym(fname.clone()))
+                        .unwrap_or(crate::parser::Expr::Symbol(fname.to_string()));
                     let item_expr = crate::parser::atom_to_expr(item)
                         .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
-                    let call = crate::parser::Expr::List(std::sync::Arc::from([fn_expr.clone(), item_expr]));
+                    let call = crate::parser::Expr::List(std::sync::Arc::from([fn_expr, item_expr]));
                     let body_rs = crate::eval::machine::step::run_rs(
                         std::sync::Arc::new(call),
                         crate::env::Env::new(),
                         table,
                         &mut None,
                     )?;
-                    let val = body_rs.into_iter().next().map(|(a, _)| a).ok_or_else(|| {
-                        format!("map-atom: function {} produced no result for item {}", fname, item.to_sexpr_string())
-                    })?;
-                    results.push(val);
+                    Ok(body_rs.into_iter().map(|(a, _)| a).collect())
                 }
-            }
-            Atom::Expr(parts) if parts.len() == 3 && parts[0] == Atom::sym("partial") => {
-                if let Atom::Sym(fn_name) = &parts[1] {
-                    let old_args: Vec<Atom> = match &parts[2] {
-                        Atom::Expr(v) => v.to_vec(),
-                        other => vec![other.clone()],
-                    };
-                    let fn_expr = crate::parser::atom_to_expr(&Atom::Sym(fn_name.clone()))
-                        .unwrap_or(crate::parser::Expr::Symbol(fn_name.to_string()));
-                    let mut old_arg_exprs: Vec<crate::parser::Expr> = old_args.iter()
-                        .map(|a| crate::parser::atom_to_expr(a)
-                            .unwrap_or(crate::parser::Expr::Symbol(a.to_sexpr_string())))
-                        .collect();
-                    for item in &items {
+                Atom::Expr(parts) if parts.len() == 3 && parts[0] == Atom::sym("partial") => {
+                    if let Atom::Sym(fn_name) = &parts[1] {
+                        let old_args: Vec<Atom> = match &parts[2] {
+                            Atom::Expr(v) => v.to_vec(),
+                            other => vec![other.clone()],
+                        };
+                        let fn_expr = crate::parser::atom_to_expr(&Atom::Sym(fn_name.clone()))
+                            .unwrap_or(crate::parser::Expr::Symbol(fn_name.to_string()));
+                        let old_arg_exprs: Vec<crate::parser::Expr> = old_args.iter()
+                            .map(|a| crate::parser::atom_to_expr(a)
+                                .unwrap_or(crate::parser::Expr::Symbol(a.to_sexpr_string())))
+                            .collect();
                         let item_expr = crate::parser::atom_to_expr(item)
                             .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
-                        let mut call_items = vec![fn_expr.clone()];
-                        call_items.extend(old_arg_exprs.clone());
+                        let mut call_items = vec![fn_expr];
+                        call_items.extend(old_arg_exprs);
                         call_items.push(item_expr);
                         let call = crate::parser::Expr::List(call_items.into());
                         let body_rs = crate::eval::machine::step::run_rs(
@@ -531,36 +520,53 @@ pub fn register_collection_builtins(funcs: &FnTable) {
                             table,
                             &mut None,
                         )?;
-                        let val = body_rs.into_iter().next().map(|(a, _)| a).ok_or_else(|| {
-                            format!("map-atom: partial function produced no result for item {}", item.to_sexpr_string())
-                        })?;
-                        results.push(val);
+                        Ok(body_rs.into_iter().map(|(a, _)| a).collect())
+                    } else {
+                        Err("map-atom: partial function name must be a symbol".into())
                     }
-                } else {
-                    return Err("map-atom: partial function name must be a symbol".into());
                 }
-            }
-            _ => {
-                let func_expr = crate::parser::atom_to_expr(func_atom)
-                    .unwrap_or(crate::parser::Expr::Symbol(func_atom.to_sexpr_string()));
-                for item in &items {
+                _ => {
+                    let func_expr = crate::parser::atom_to_expr(func_atom)
+                        .unwrap_or(crate::parser::Expr::Symbol(func_atom.to_sexpr_string()));
                     let item_expr = crate::parser::atom_to_expr(item)
                         .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
-                    let call = crate::parser::Expr::List(std::sync::Arc::from([func_expr.clone(), item_expr]));
+                    let call = crate::parser::Expr::List(std::sync::Arc::from([func_expr, item_expr]));
                     let body_rs = crate::eval::machine::step::run_rs(
                         std::sync::Arc::new(call),
                         crate::env::Env::new(),
                         table,
                         &mut None,
                     )?;
-                    let val = body_rs.into_iter().next().map(|(a, _)| a).ok_or_else(|| {
-                        format!("map-atom: function produced no result for item {}", item.to_sexpr_string())
-                    })?;
-                    results.push(val);
+                    Ok(body_rs.into_iter().map(|(a, _)| a).collect())
                 }
             }
+        };
+
+        // ponytail: Cartesian product for mapping nondeterminism, fail list if any element fails to map
+        let mut current_combinations = vec![Vec::new()];
+        for item in &items {
+            let res = get_item_choices(item, table)?;
+            if res.is_empty() {
+                current_combinations.clear();
+                break;
+            }
+            let mut next_combinations = Vec::new();
+            for prev_list in current_combinations {
+                for choice_val in &res {
+                    let mut new_list = prev_list.clone();
+                    new_list.push(choice_val.clone());
+                    next_combinations.push(new_list);
+                }
+            }
+            current_combinations = next_combinations;
         }
-        Ok(NDet::single(Atom::Expr(crate::atom::expr_data(results))))
+
+        let mapped_lists: Vec<Atom> = current_combinations
+            .into_iter()
+            .map(|l| Atom::Expr(crate::atom::expr_data(l)))
+            .collect();
+
+        Ok(NDet::stream(mapped_lists.into_iter()))
     });
 
     funcs.insert_native("maplist", 2, |args, table| {
