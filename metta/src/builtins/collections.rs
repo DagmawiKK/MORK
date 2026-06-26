@@ -9,12 +9,24 @@ fn expect(args: &[Atom], n: usize, name: &str) -> Result<(), String> {
     crate::builtins::arithmetic::expect_n_args(args, n, name)
 }
 
+fn is_improper_list(items: &[Atom]) -> bool {
+    items.len() >= 3 && items[items.len() - 2] == Atom::sym(".")
+}
+
 fn decons_impl(args: &[Atom], _: &FnTable) -> Result<NDet, String> {
     expect(args, 1, "decons")?;
     match &args[0] {
         Atom::Expr(items) if !items.is_empty() => {
             let head = items[0].clone();
-            let rest = Atom::Expr(crate::atom::expr_data(&items[1..]));
+            let rest = if is_improper_list(items) {
+                if items.len() == 3 {
+                    items[2].clone()
+                } else {
+                    Atom::Expr(crate::atom::expr_data(&items[1..]))
+                }
+            } else {
+                Atom::Expr(crate::atom::expr_data(&items[1..]))
+            };
             Ok(NDet::single(Atom::Expr(crate::atom::expr_data([head, rest]))))
         }
         Atom::Expr(_) => Err("decons: empty list".into()),
@@ -77,19 +89,30 @@ pub fn register_collection_builtins(funcs: &FnTable) {
     funcs.insert_native("cdr-atom", 1, |args, _| {
         expect(args, 1, "cdr-atom")?;
         match &args[0] {
-            Atom::Expr(items) if !items.is_empty() => Ok(NDet::single(Atom::Expr(crate::atom::expr_data(&items[1..])))),
-        Atom::Expr(_) => {
-            crate::eval::shared::debug::logical_failure(|| {
-                "warn: cdr-atom on empty list".to_string()
-            });
-            Ok(NDet::stream(std::iter::empty()))
-        }
-        other => {
-            crate::eval::shared::debug::logical_failure(|| {
-                format!("warn: cdr-atom: expected list, got {}", other.to_sexpr_string())
-            });
-            Ok(NDet::stream(std::iter::empty()))
-        }
+            Atom::Expr(items) if !items.is_empty() => {
+                let cdr_val = if is_improper_list(items) {
+                    if items.len() == 3 {
+                        items[2].clone()
+                    } else {
+                        Atom::Expr(crate::atom::expr_data(&items[1..]))
+                    }
+                } else {
+                    Atom::Expr(crate::atom::expr_data(&items[1..]))
+                };
+                Ok(NDet::single(cdr_val))
+            }
+            Atom::Expr(_) => {
+                crate::eval::shared::debug::logical_failure(|| {
+                    "warn: cdr-atom on empty list".to_string()
+                });
+                Ok(NDet::stream(std::iter::empty()))
+            }
+            other => {
+                crate::eval::shared::debug::logical_failure(|| {
+                    format!("warn: cdr-atom: expected list, got {}", other.to_sexpr_string())
+                });
+                Ok(NDet::stream(std::iter::empty()))
+            }
         }
     });
     funcs.mark_pure("cdr-atom", 1);
@@ -97,32 +120,57 @@ pub fn register_collection_builtins(funcs: &FnTable) {
     funcs.insert_native("cdr", 1, |args, _| {
         expect(args, 1, "cdr")?;
         match &args[0] {
-            Atom::Expr(items) if !items.is_empty() => Ok(NDet::single(Atom::Expr(crate::atom::expr_data(&items[1..])))),
+            Atom::Expr(items) if !items.is_empty() => {
+                let cdr_val = if is_improper_list(items) {
+                    if items.len() == 3 {
+                        items[2].clone()
+                    } else {
+                        Atom::Expr(crate::atom::expr_data(&items[1..]))
+                    }
+                } else {
+                    Atom::Expr(crate::atom::expr_data(&items[1..]))
+                };
+                Ok(NDet::single(cdr_val))
+            }
             Atom::Expr(_) => Err("cdr: empty list".into()),
             other => Err(format!("cdr: expected list, got {}", other.to_sexpr_string())),
         }
     });
     funcs.mark_pure("cdr", 1);
 
+    // align cons/cons-atom to fail/error on non-expressions, keeping consistency with car/cdr
     funcs.insert_native("cons-atom", 2, |args, _| {
         expect(args, 2, "cons-atom")?;
-        let mut out = vec![args[0].clone()];
         match &args[1] {
-            Atom::Expr(items) => out.extend(items.iter().cloned()),
-            other => out.push(other.clone()),
+            Atom::Expr(items) => {
+                let mut out = Vec::with_capacity(items.len() + 1);
+                out.push(args[0].clone());
+                out.extend(items.iter().cloned());
+                Ok(NDet::single(Atom::Expr(crate::atom::expr_data(out))))
+            }
+            other => {
+                // construct dotted-pair representation (H . T) if T is not an expression
+                let out = vec![args[0].clone(), Atom::sym("."), other.clone()];
+                Ok(NDet::single(Atom::Expr(crate::atom::expr_data(out))))
+            }
         }
-        Ok(NDet::single(Atom::Expr(crate::atom::expr_data(out))))
     });
     funcs.mark_pure("cons-atom", 2);
 
     funcs.insert_native("cons", 2, |args, _| {
         expect(args, 2, "cons")?;
-        let mut out = vec![args[0].clone()];
         match &args[1] {
-            Atom::Expr(items) => out.extend(items.iter().cloned()),
-            other => out.push(other.clone()),
+            Atom::Expr(items) => {
+                let mut out = Vec::with_capacity(items.len() + 1);
+                out.push(args[0].clone());
+                out.extend(items.iter().cloned());
+                Ok(NDet::single(Atom::Expr(crate::atom::expr_data(out))))
+            }
+            other => {
+                let out = vec![args[0].clone(), Atom::sym("."), other.clone()];
+                Ok(NDet::single(Atom::Expr(crate::atom::expr_data(out))))
+            }
         }
-        Ok(NDet::single(Atom::Expr(crate::atom::expr_data(out))))
     });
     funcs.mark_pure("cons", 2);
 
@@ -473,7 +521,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
         };
         let func_atom = &args[1];
 
-        // ponytail: helper to evaluate dynamic mapping function for a single item
+        // helper to evaluate dynamic mapping function for a single item
         let get_item_choices = |item: &Atom, table: &FnTable| -> Result<Vec<Atom>, String> {
             match func_atom {
                 Atom::Sym(fname) => {
@@ -542,7 +590,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
             }
         };
 
-        // ponytail: Cartesian product for mapping nondeterminism, fail list if any element fails to map
+        // Cartesian product for mapping nondeterminism, fail list if any element fails to map
         let mut current_combinations = vec![Vec::new()];
         for item in &items {
             let res = get_item_choices(item, table)?;
@@ -591,7 +639,7 @@ pub fn register_collection_builtins(funcs: &FnTable) {
 
     funcs.insert_native("filter-atom", 2, |args, table| {
         expect(args, 2, "filter-atom")?;
-        // ponytail: filter-atom takes (list func) order, mirroring map-atom
+        // filter-atom takes (list func) order, mirroring map-atom
         let items: Vec<Atom> = match &args[0] {
             Atom::Expr(v) => v.to_vec(),
             other => vec![other.clone()],
