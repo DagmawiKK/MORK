@@ -422,7 +422,7 @@ fn is_pure_expr_inner(
                     "quote" | "|->" | "empty" => Effect::Pure,
                     // Effect = max of all argument effects.
                     "if" | "progn" | "prog1" | "let" | "let*" | "chain" | "collapse"
-                    | "superpose" | "once" => args_effect(),
+                    | "superpose" | "hyperpose" | "once" => args_effect(),
                     // SpaceRead: reads `k` (QUERY rule in spec) but never mutates it.
                     // RwLock allows concurrent readers → parallelizable.
                     "match" | "case" => Effect::SpaceRead,
@@ -432,13 +432,28 @@ fn is_pure_expr_inner(
                     | "foldall" | "map-atom" | "forall" | "within" | "py-call"
                     | "import-rs!" => Effect::SpaceMutate,
                     _ => {
-                        // Registered natives: look up their declared Effect.
                         // Self-recursion: optimistically Pure to avoid infinite loop.
                         let callee_effect = if assume_pure == Some(s.as_str()) {
                             Effect::Pure
                         } else {
-                            funcs.effect_of(s, (items.len() - 1) as u8)
-                                .unwrap_or(Effect::SpaceMutate) // unknown = conservative
+                            let arity = (items.len() - 1) as u8;
+                            // Prefer a native's declared Effect; otherwise fall back to
+                            // the purity computed for a user-defined function at
+                            // definition time. Without this, a call to any user
+                            // function (e.g. `prime?`) is treated as impure and its
+                            // callers never parallelize. Unknown ⇒ conservative.
+                            funcs
+                                .effect_of(s, arity)
+                                .or_else(|| {
+                                    funcs
+                                        .fn_effect
+                                        .read()
+                                        .unwrap()
+                                        .get(s)
+                                        .and_then(|m| m.get(&arity))
+                                        .copied()
+                                })
+                                .unwrap_or(Effect::SpaceMutate)
                         };
                         callee_effect.max(args_effect())
                     }
