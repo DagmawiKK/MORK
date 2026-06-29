@@ -4,9 +4,7 @@
 #![feature(stmt_expr_attributes)]
 #![feature(more_float_constants)]
 
-pub mod space;
-mod sources;
-mod sinks;
 mod pure;
-pub mod weightedsweep;
-mod weightedsweep_tests;
+mod sinks;
+mod sources;
+pub mod space;
