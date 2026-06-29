@@ -401,17 +401,60 @@ pub fn register_collection_builtins(funcs: &FnTable) {
         expect(args, 3, "foldl")?;
         let items: Vec<Atom> = match &args[2] { Atom::Expr(v) => v.to_vec(), other => vec![other.clone()] };
         let mut acc = args[1].clone();
-        for item in &items {
-            let fname = match &args[0] {
-                Atom::Sym(s) => s.clone(),
-                _ => return Err("foldl: first arg must be a symbol (function name)".into()),
-            };
-            let func_ref = table.get(&fname, 2)
-                .ok_or_else(|| format!("foldl: function {} with arity 2 not found", fname))?;
-            let func_ptr = match &func_ref.kind { FunctionKind::Native { func } => func.clone() };
-            drop(func_ref);
-            let mut result = func_ptr(&[acc, item.clone()], table)?;
-            acc = result.next().ok_or_else(|| "foldl: function produced no results".to_string())?;
+        let func_atom = &args[0];
+        match func_atom {
+            Atom::Sym(fname) => {
+                if let Some(function) = table.get(fname, 2) {
+                    if let crate::func::FunctionKind::Native { func } = &function.kind {
+                        for item in &items {
+                            let mut result = func(&[acc, item.clone()], table)?;
+                            acc = result.next().ok_or_else(|| {
+                                format!("foldl: function {} produced no result for item {}", fname, item.to_sexpr_string())
+                            })?;
+                        }
+                        return Ok(NDet::single(acc));
+                    }
+                }
+                // Fallback for user-defined functions
+                let fn_expr = crate::parser::atom_to_expr(&Atom::Sym(fname.clone()))
+                    .unwrap_or(crate::parser::Expr::Symbol(fname.to_string()));
+                for item in &items {
+                    let item_expr = crate::parser::atom_to_expr(item)
+                        .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
+                    let acc_expr = crate::parser::atom_to_expr(&acc)
+                        .unwrap_or(crate::parser::Expr::Symbol(acc.to_sexpr_string()));
+                    let call = crate::parser::Expr::List(Arc::from([fn_expr.clone(), acc_expr, item_expr]));
+                    let body_rs = crate::eval::machine::step::run_rs(
+                        std::sync::Arc::new(call),
+                        crate::env::Env::new(),
+                        table,
+                        &mut None,
+                    )?;
+                    acc = body_rs.into_iter().next().map(|(a, _)| a).ok_or_else(|| {
+                        format!("foldl: function {} produced no result for item {}", fname, item.to_sexpr_string())
+                    })?;
+                }
+            }
+            _ => {
+                let func_expr = crate::parser::atom_to_expr(func_atom)
+                    .unwrap_or(crate::parser::Expr::Symbol(func_atom.to_sexpr_string()));
+                for item in &items {
+                    let item_expr = crate::parser::atom_to_expr(item)
+                        .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
+                    let acc_expr = crate::parser::atom_to_expr(&acc)
+                        .unwrap_or(crate::parser::Expr::Symbol(acc.to_sexpr_string()));
+                    let call = crate::parser::Expr::List(Arc::from([func_expr.clone(), acc_expr, item_expr]));
+                    let body_rs = crate::eval::machine::step::run_rs(
+                        std::sync::Arc::new(call),
+                        crate::env::Env::new(),
+                        table,
+                        &mut None,
+                    )?;
+                    acc = body_rs.into_iter().next().map(|(a, _)| a).ok_or_else(|| {
+                        format!("foldl: function produced no result for item {}", item.to_sexpr_string())
+                    })?;
+                }
+            }
         }
         Ok(NDet::single(acc))
     });
@@ -519,19 +562,60 @@ pub fn register_collection_builtins(funcs: &FnTable) {
     funcs.insert_native("maplist", 2, |args, table| {
         expect(args, 2, "maplist")?;
         let items: Vec<Atom> = match &args[1] { Atom::Expr(v) => v.to_vec(), other => vec![other.clone()] };
-        let fname = match &args[0] {
-            Atom::Sym(s) => s.clone(),
-            _ => return Err("maplist: first arg must be a symbol (function name)".into()),
-        };
+        let func_atom = &args[0];
         let mut results = Vec::with_capacity(items.len());
-        for item in &items {
-            let func_ref = table.get(&fname, 1)
-                .ok_or_else(|| format!("maplist: function {} with arity 1 not found", fname))?;
-            let func_ptr = match &func_ref.kind { FunctionKind::Native { func } => func.clone() };
-            drop(func_ref);
-            let mut result = func_ptr(&[item.clone()], table)?;
-            let val = result.next().ok_or_else(|| format!("maplist: function produced no results for item {}", item.to_sexpr_string()))?;
-            results.push(val);
+        match func_atom {
+            Atom::Sym(fname) => {
+                if let Some(function) = table.get(fname, 1) {
+                    if let crate::func::FunctionKind::Native { func } = &function.kind {
+                        for item in &items {
+                            let mut result = func(&[item.clone()], table)?;
+                            let val = result.next().ok_or_else(|| {
+                                format!("maplist: function {} produced no result for item {}", fname, item.to_sexpr_string())
+                            })?;
+                            results.push(val);
+                        }
+                        return Ok(NDet::single(Atom::Expr(results.into())));
+                    }
+                }
+                // Fallback for user-defined functions
+                let fn_expr = crate::parser::atom_to_expr(&Atom::Sym(fname.clone()))
+                    .unwrap_or(crate::parser::Expr::Symbol(fname.to_string()));
+                for item in &items {
+                    let item_expr = crate::parser::atom_to_expr(item)
+                        .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
+                    let call = crate::parser::Expr::List(Arc::from([fn_expr.clone(), item_expr]));
+                    let body_rs = crate::eval::machine::step::run_rs(
+                        std::sync::Arc::new(call),
+                        crate::env::Env::new(),
+                        table,
+                        &mut None,
+                    )?;
+                    let val = body_rs.into_iter().next().map(|(a, _)| a).ok_or_else(|| {
+                        format!("maplist: function {} produced no result for item {}", fname, item.to_sexpr_string())
+                    })?;
+                    results.push(val);
+                }
+            }
+            _ => {
+                let func_expr = crate::parser::atom_to_expr(func_atom)
+                    .unwrap_or(crate::parser::Expr::Symbol(func_atom.to_sexpr_string()));
+                for item in &items {
+                    let item_expr = crate::parser::atom_to_expr(item)
+                        .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
+                    let call = crate::parser::Expr::List(Arc::from([func_expr.clone(), item_expr]));
+                    let body_rs = crate::eval::machine::step::run_rs(
+                        std::sync::Arc::new(call),
+                        crate::env::Env::new(),
+                        table,
+                        &mut None,
+                    )?;
+                    let val = body_rs.into_iter().next().map(|(a, _)| a).ok_or_else(|| {
+                        format!("maplist: function produced no result for item {}", item.to_sexpr_string())
+                    })?;
+                    results.push(val);
+                }
+            }
         }
         Ok(NDet::single(Atom::Expr(results.into())))
     });
@@ -539,19 +623,56 @@ pub fn register_collection_builtins(funcs: &FnTable) {
     funcs.insert_native("filter-atom", 2, |args, table| {
         expect(args, 2, "filter-atom")?;
         let items: Vec<Atom> = match &args[1] { Atom::Expr(v) => v.to_vec(), other => vec![other.clone()] };
-        let fname = match &args[0] {
-            Atom::Sym(s) => s.clone(),
-            _ => return Err("filter-atom: first arg must be a symbol (function name)".into()),
-        };
+        let func_atom = &args[0];
         let mut results = Vec::with_capacity(items.len());
-        for item in &items {
-            let func_ref = table.get(&fname, 1)
-                .ok_or_else(|| format!("filter-atom: function {} with arity 1 not found", fname))?;
-            let func_ptr = match &func_ref.kind { FunctionKind::Native { func } => func.clone() };
-            drop(func_ref);
-            let mut result = func_ptr(&[item.clone()], table)?;
-            if let Some(val) = result.next() {
-                if val == Atom::sym("True") { results.push(item.clone()); }
+        match func_atom {
+            Atom::Sym(fname) => {
+                if let Some(function) = table.get(fname, 1) {
+                    if let crate::func::FunctionKind::Native { func } = &function.kind {
+                        for item in &items {
+                            let mut result = func(&[item.clone()], table)?;
+                            if let Some(val) = result.next() {
+                                if val == Atom::sym("True") { results.push(item.clone()); }
+                            }
+                        }
+                        return Ok(NDet::single(Atom::Expr(results.into())));
+                    }
+                }
+                // Fallback for user-defined functions
+                let fn_expr = crate::parser::atom_to_expr(&Atom::Sym(fname.clone()))
+                    .unwrap_or(crate::parser::Expr::Symbol(fname.to_string()));
+                for item in &items {
+                    let item_expr = crate::parser::atom_to_expr(item)
+                        .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
+                    let call = crate::parser::Expr::List(Arc::from([fn_expr.clone(), item_expr]));
+                    let body_rs = crate::eval::machine::step::run_rs(
+                        std::sync::Arc::new(call),
+                        crate::env::Env::new(),
+                        table,
+                        &mut None,
+                    )?;
+                    if let Some(val) = body_rs.into_iter().next().map(|(a, _)| a) {
+                        if val == Atom::sym("True") { results.push(item.clone()); }
+                    }
+                }
+            }
+            _ => {
+                let func_expr = crate::parser::atom_to_expr(func_atom)
+                    .unwrap_or(crate::parser::Expr::Symbol(func_atom.to_sexpr_string()));
+                for item in &items {
+                    let item_expr = crate::parser::atom_to_expr(item)
+                        .unwrap_or(crate::parser::Expr::Symbol(item.to_sexpr_string()));
+                    let call = crate::parser::Expr::List(Arc::from([func_expr.clone(), item_expr]));
+                    let body_rs = crate::eval::machine::step::run_rs(
+                        std::sync::Arc::new(call),
+                        crate::env::Env::new(),
+                        table,
+                        &mut None,
+                    )?;
+                    if let Some(val) = body_rs.into_iter().next().map(|(a, _)| a) {
+                        if val == Atom::sym("True") { results.push(item.clone()); }
+                    }
+                }
             }
         }
         Ok(NDet::single(Atom::Expr(results.into())))
