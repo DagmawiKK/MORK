@@ -4,10 +4,10 @@
 #![feature(stmt_expr_attributes)]
 #![feature(more_float_constants)]
 
-pub mod space;
-mod sources;
-mod sinks;
 mod pure;
 
 pub use sinks::WriteResourceRequest;
 pub use sources::ResourceRequest;
+mod sinks;
+mod sources;
+pub mod space;

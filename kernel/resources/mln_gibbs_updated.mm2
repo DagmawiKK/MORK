@@ -1,0 +1,117 @@
+;; ============================================================
+;; MLN Metropolis-Hastings Gibbs via PureSink + WAS
+;;
+;; Variables: A, B  (Boolean, value 0/1)
+;; Clause: (not A B) with weight 2.0
+;;
+;; The clause (not A B) = (¬A ∨ B) is satisfied when:
+;;   A=0 (¬A=1) or B=1
+;;
+;; delta = w * (flip_sat - curr_sat)
+;; where curr_sat = LIT($sign, $v) || LIT($osign, $ov)
+;;       flip_sat = LIT($sign, $nv) || LIT($osign, $ov)
+;;
+;; Both variable's values and polarities are bound directly from the
+;; pattern match via OtherVar cross-reference, eliminating the need
+;; for a separate precompute exec.
+;; ============================================================
+
+;; ---- Variables with initial values and WAS weights ----
+(W A 1)
+(W B 1)
+(Val A 0)
+(Val B 0)
+
+;; ---- Clauses ---
+(Clause c1 2.0 (not A B))
+
+;; ---- Incidence index ----
+(InClause A c1)
+(InClause B c1)
+
+;; ---- Clause polarity (+1 positive, -1 negative) ----
+(Polarity c1 A -1)
+(Polarity c1 B +1)
+
+;; ---- Other variable lookup (binary clause) ----
+(OtherVar c1 A B)
+(OtherVar c1 B A)
+
+;; ---- WAS weight setup (exec 0 runs once, then exec flip-state takes over) ----
+(exec 0
+  (, (W $x $w))
+  (O (ws 1 (W $x $w))))
+
+;; ---- Flip lookup table ----
+(Flip 0 1)
+(Flip 1 0)
+
+;; ---- Metropolis-Hastings Gibbs loop ----
+;; For visited variable $n:
+;;   Compute LIT for self ($sign, $v/$nv) and other ($osign, $ov)
+;;   delta = w * ((LIT($sign, $nv) || LIT($osign, $ov))
+;;              - (LIT($sign, $v)  || LIT($osign, $ov)))
+;;   accept if random() < exp(min(0, delta))
+(exec flip-state
+  (I (ws-select (W $n $w))
+     (exec flip-state $p $t)
+     (Val $n $v)
+     (Flip $v $nv)
+     (InClause $n $c)
+      (Clause $c $weight (not $a $b))
+      (Polarity $c $n $sign)
+      (OtherVar $c $n $other)
+      (Val $other $ov)
+      (Polarity $c $other $osign))
+  (O (ws (W $n $w)
+         (product_f64 (f64_from_string $weight)
+           (sub_f64 (f64_from_string 1)
+             (ifnz (f64_ge (f64_from_string $osign) (f64_from_string 0))
+               then (ifnz (u32_eq (i32_from_string $ov) (i32_from_string 0))
+                 then (f64_from_string 0)
+                 else (f64_from_string 1))
+               else (ifnz (u32_eq (i32_from_string $ov) (i32_from_string 0))
+                 then (f64_from_string 1)
+                 else (f64_from_string 0))))))
+     (- (Val $n $v))
+     (pure (Val $n $final) $final
+       (ifnz (f64_le (random_f64)
+                     (exp_f64 (min_f64 (f64_from_string 0)
+                       (product_f64 (f64_from_string $weight)
+                         (sum_f64
+                           ;; flip_sat = OR(LIT($sign, $nv), LIT($osign, $ov))
+                           (ifnz (ifnz (f64_ge (f64_from_string $sign) (f64_from_string 0))
+                                   then (ifnz (u32_eq (i32_from_string $nv) (i32_from_string 0))
+                                     then (f64_from_string 0)
+                                     else (f64_from_string 1))
+                                   else (ifnz (u32_eq (i32_from_string $nv) (i32_from_string 0))
+                                     then (f64_from_string 1)
+                                     else (f64_from_string 0)))
+                             then (f64_from_string 1)
+                             else (ifnz (f64_ge (f64_from_string $osign) (f64_from_string 0))
+                               then (ifnz (u32_eq (i32_from_string $ov) (i32_from_string 0))
+                                 then (f64_from_string 0)
+                                 else (f64_from_string 1))
+                               else (ifnz (u32_eq (i32_from_string $ov) (i32_from_string 0))
+                                 then (f64_from_string 1)
+                                 else (f64_from_string 0))))
+                           (neg_f64
+                             ;; curr_sat = OR(LIT($sign, $v), LIT($osign, $ov))
+                             (ifnz (ifnz (f64_ge (f64_from_string $sign) (f64_from_string 0))
+                                     then (ifnz (u32_eq (i32_from_string $v) (i32_from_string 0))
+                                       then (f64_from_string 0)
+                                       else (f64_from_string 1))
+                                     else (ifnz (u32_eq (i32_from_string $v) (i32_from_string 0))
+                                       then (f64_from_string 1)
+                                       else (f64_from_string 0)))
+                               then (f64_from_string 1)
+                               else (ifnz (f64_ge (f64_from_string $osign) (f64_from_string 0))
+                                 then (ifnz (u32_eq (i32_from_string $ov) (i32_from_string 0))
+                                   then (f64_from_string 0)
+                                   else (f64_from_string 1))
+                                 else (ifnz (u32_eq (i32_from_string $ov) (i32_from_string 0))
+                                   then (f64_from_string 1)
+                                   else (f64_from_string 0))))))))))
+         then (i32_to_string (i32_from_string $nv))
+         else (i32_to_string (i32_from_string $v))))
+     (+ (exec flip-state $p $t))))

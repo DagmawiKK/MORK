@@ -631,6 +631,7 @@ op!(num nulary pi_f64() => std::f64::consts::PI);
 op!(num nulary tau_f64() => std::f64::consts::TAU);
 // op!(num nulary phi_f64() => std::f64::consts::PHI); // pre https://github.com/rust-lang/rust/pull/151164
 op!(num nulary phi_f64() => std::f64::consts::GOLDEN_RATIO);
+op!(num nulary random_f64() => rand::random::<f64>());
 op!(num unary to_radians_f64(x: f64) => x.to_radians());
 op!(num unary to_degrees_f64(x: f64) => x.to_degrees());
 op!(num unary sin_f64(x: f64) => x.sin());
@@ -661,6 +662,8 @@ op!(num unary trunc_f64(x: f64) => x.trunc());
 op!(num unary recip_f64(x: f64) => x.recip());
 op!(num unary fract_f64(x: f64) => x.fract());
 op!(num unary signum_f64(x: f64) => x.signum());
+op!(num binary f64_le(x: f64, y: f64) => if x <= y { 1u8 } else { 0u8 });
+op!(num binary f64_ge(x: f64, y: f64) => if x >= y { 1u8 } else { 0u8 });
 op!(num binary copysign_f64(x: f64, s: f64) => x.copysign(s));
 op!(num binary powf_f64(x: f64, exp: f64) => x.powf(exp));
 op!(num binary powi_f64(x: f64, exp: i32) => x.powi(exp));
@@ -1184,6 +1187,7 @@ pub fn register(scope: &mut EvalScope) {
     scope.add_func("pi_f64", pi_f64, FuncType::Pure);
     scope.add_func("tau_f64", tau_f64, FuncType::Pure);
     scope.add_func("phi_f64", phi_f64, FuncType::Pure);
+    scope.add_func("random_f64", random_f64, FuncType::Pure);
     scope.add_func("to_radians_f64", to_radians_f64, FuncType::Pure);
     scope.add_func("to_degrees_f64", to_degrees_f64, FuncType::Pure);
     scope.add_func("sin_f64", sin_f64, FuncType::Pure);
@@ -1214,6 +1218,8 @@ pub fn register(scope: &mut EvalScope) {
     scope.add_func("recip_f64", recip_f64, FuncType::Pure);
     scope.add_func("fract_f64", fract_f64, FuncType::Pure);
     scope.add_func("signum_f64", signum_f64, FuncType::Pure);
+    scope.add_func("f64_le", f64_le, FuncType::Pure);
+    scope.add_func("f64_ge", f64_ge, FuncType::Pure);
     scope.add_func("copysign_f64", copysign_f64, FuncType::Pure);
     scope.add_func("powf_f64", powf_f64, FuncType::Pure);
     scope.add_func("powi_f64", powi_f64, FuncType::Pure);

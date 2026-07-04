@@ -56,8 +56,23 @@ impl ExprSource {
                     rv.push('(');
                     length.push(arity as usize);
                 }
+                Tag::LongArity => {
+                    let a = unsafe { mork_expr::read_arity_at(self.ptr.add(pos - 1)) };
+                    // self.ptr was already advanced by 1 (pos += 1 before match),
+                    // so self.ptr.add(pos - 1) points to the LongArity byte.
+                    // The arity occupies 2 bytes starting at pos-1, so we need
+                    // to skip one more byte.
+                    rv.push('(');
+                    length.push(a as usize);
+                    pos += 1; // skip the continuation byte
+                }
                 Tag::NewVar => {
                     rv.push('$');
+                }
+                Tag::LongVarRef => {
+                    let n = unsafe { *self.ptr.add(pos) };
+                    pos += 1;
+                    write!(&mut rv, "${}", n).unwrap();
                 }
                 Tag::VarRef(n) => {
                     write!(&mut rv, "${}", n).unwrap();

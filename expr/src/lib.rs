@@ -82,19 +82,21 @@ mod gxhash {
 #[derive(Copy, Clone, Debug)]
 pub struct Breadcrumb {
     parent: u32,
-    arity: u8,
-    seen: u8,
+    arity: u64,
+    seen: u32,
 }
 
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
 #[repr(C, u8)]
 pub enum Tag {
     NewVar, // $
-    VarRef(u8), // _1 .. _63
+    VarRef(u8), // _0 .. _62 (1 byte), 63 = LongVarRef marker (2 bytes)
     SymbolSize(u8), // "" "." ".." .. "... x63"
     //                < 64 bytes
     Arity(u8), // [0] ... [63]
     // U64,
+    LongArity,
+    LongVarRef, // 2-byte escape for VarRef indices 63+
 }
 
 // [2] <u64> '8 0 0 0 1 2
@@ -118,8 +120,10 @@ pub const fn item_byte(b: Tag) -> u8 {
     match b {
         Tag::NewVar => { 0b1100_0000 | 0 }
         Tag::SymbolSize(s) => { debug_assert!(s > 0 && s < 64); 0b1100_0000 | s }
-        Tag::VarRef(i) => { debug_assert!(i < 64); 0b1000_0000 | i }
+        Tag::VarRef(i) => { debug_assert!(i < 63); 0b1000_0000 | i }
         Tag::Arity(a) => { debug_assert!(a < 64); 0b0000_0000 | a }
+        Tag::LongArity => { panic!("item_byte called on LongArity; use write_arity") }
+        Tag::LongVarRef => { panic!("item_byte called on LongVarRef; use write_var_ref") }
     }
 }
 
@@ -127,17 +131,59 @@ pub const fn item_byte(b: Tag) -> u8 {
 pub fn byte_item(b: u8) -> Tag {
     if b == 0b1100_0000 { return Tag::NewVar; }
     else if (b & 0b1100_0000) == 0b1100_0000 { return Tag::SymbolSize(b & 0b0011_1111) }
-    else if (b & 0b1100_0000) == 0b1000_0000 { return Tag::VarRef(b & 0b0011_1111) }
+    else if (b & 0b1100_0000) == 0b1000_0000 { let idx = b & 0b0011_1111; return if idx == 63 { Tag::LongVarRef } else { Tag::VarRef(idx) } }
     else if (b & 0b1100_0000) == 0b0000_0000 { return Tag::Arity(b & 0b0011_1111) }
+    else if (b & 0b1100_0000) == 0b0100_0000 { return Tag::LongArity }
     else { panic!("reserved {}", b) }
 }
 
 pub const fn maybe_byte_item(b: u8) -> Result<Tag, u8> {
     if b == 0b1100_0000 { return Ok(Tag::NewVar); }
     else if (b & 0b1100_0000) == 0b1100_0000 { return Ok(Tag::SymbolSize(b & 0b0011_1111)) }
-    else if (b & 0b1100_0000) == 0b1000_0000 { return Ok(Tag::VarRef(b & 0b0011_1111)) }
+    else if (b & 0b1100_0000) == 0b1000_0000 { let idx = b & 0b0011_1111; if idx == 63 { return Ok(Tag::LongVarRef) } else { return Ok(Tag::VarRef(idx)) } }
     else if (b & 0b1100_0000) == 0b0000_0000 { return Ok(Tag::Arity(b & 0b0011_1111)) }
+    else if (b & 0b1100_0000) == 0b0100_0000 { return Ok(Tag::LongArity) }
     else { return Err(b) }
+}
+
+/// Decode the arity from a LongArity 2-byte encoding at `ptr`.
+/// First byte: `01_LL_LLLL` (low 6 bits), second byte: continuation (high bits).
+#[inline(always)]
+pub fn read_arity_at(ptr: *const u8) -> u64 {
+    unsafe {
+        let lo = (*ptr) as u64 & 0b0011_1111;
+        let hi = *ptr.byte_add(1) as u64;
+        lo | (hi << 6)
+    }
+}
+
+/// Number of bytes consumed by an arity encoding starting at `ptr`.
+#[inline(always)]
+pub fn arity_byte_count_at(ptr: *const u8) -> usize {
+    if unsafe { (*ptr) & 0b1100_0000 } == 0b0100_0000 {
+        2
+    } else {
+        1
+    }
+}
+
+/// Read a VarRef from ptr, returning the variable index.
+/// 0xBF is a 2-byte escape for indices >= 63.
+#[inline(always)]
+pub fn read_var_ref_at(ptr: *const u8) -> u8 {
+    unsafe {
+        let b = *ptr;
+        let idx = b & 0b0011_1111;
+        if idx == 63 { *ptr.byte_add(1) } else { idx }
+    }
+}
+
+/// Number of bytes consumed by a VarRef encoding starting at `ptr`.
+#[inline(always)]
+pub fn var_ref_byte_count_at(ptr: *const u8) -> usize {
+    unsafe {
+        if (*ptr & 0b0011_1111) == 63 { 2 } else { 1 }
+    }
 }
 
 // pub fn str_item(ptr: *mut u8) -> (usize, Result<Tag, &[u8]>) {
@@ -219,7 +265,7 @@ macro_rules! traverse {
             #[inline(always)] fn new_var(&mut self, offset: usize) -> $t2 { ($new_var)(offset) }
             #[inline(always)] fn var_ref(&mut self, offset: usize, i: u8) -> $t2 { ($var_ref)(offset, i) }
             #[inline(always)] fn symbol(&mut self, offset: usize, s: &[u8]) -> $t2 { ($symbol)(offset, s) }
-            #[inline(always)] fn zero(&mut self, offset: usize, a: u8) -> $t1 { ($zero)(offset, a) }
+            #[inline(always)] fn zero(&mut self, offset: usize, a: u64) -> $t1 { ($zero)(offset, a) }
             #[inline(always)] fn add(&mut self, offset: usize, acc: $t1, sub: $t2) -> $t1 { ($add)(offset, acc, sub) }
             #[inline(always)] fn finalize(&mut self, offset: usize, acc: $t1) -> $t2 { ($finalize)(offset, acc) }
         }
@@ -232,7 +278,7 @@ macro_rules! traverse {
 macro_rules! traverseh {
     ($t1:ty, $t2:ty, $t3:ty, $x:expr, $v0:expr, $new_var:expr, $var_ref:expr, $symbol:expr, $zero:expr, $add:expr, $finalize:expr) => {{
     let mut h: $t3 = $v0;
-    struct State<X> { iter: u8, payload: X }
+    struct State<X> { iter: u64, payload: X }
     let mut stack: SmallVec<[State<$t1>; 8]> = SmallVec::new();
     // let mut stack = vec![];
     let mut j: usize = 0;
@@ -240,11 +286,23 @@ macro_rules! traverseh {
         let mut value = match unsafe { byte_item(*$x.ptr.byte_add(j)) } {
             Tag::NewVar => { j += 1; ($new_var)(&mut h, j - 1) }
             Tag::VarRef(r) => { j += 1; ($var_ref)(&mut h, j - 1, r) }
+            Tag::LongVarRef => { let r = unsafe { *$x.ptr.byte_add(j + 1) }; j += 2; ($var_ref)(&mut h, j - 2, r) }
             Tag::SymbolSize(s) => {
                 let slice = unsafe { &*slice_from_raw_parts($x.ptr.byte_add(j + 1), s as usize) };
                 let v = ($symbol)(&mut h, j, slice);
                 j += s as usize + 1;
                 v
+            }
+            Tag::LongArity => {
+                let a = read_arity_at(unsafe { $x.ptr.byte_add(j) });
+                let acc = ($zero)(&mut h, j, a as u8);
+                j += 2;
+                if a == 0 {
+                    ($finalize)(&mut h, j, acc)
+                } else {
+                    stack.push(State{ iter: a, payload: acc });
+                    continue 'putting;
+                }
             }
             Tag::Arity(a) => {
                 let acc = ($zero)(&mut h, j, a);
@@ -252,7 +310,7 @@ macro_rules! traverseh {
                 if a == 0 {
                     ($finalize)(&mut h, j, acc)
                 } else {
-                    stack.push(State{ iter: a, payload: acc });
+                    stack.push(State{ iter: a as u64, payload: acc });
                     continue 'putting;
                 }
             }
@@ -288,10 +346,13 @@ impl Expr {
         }
     }
 
-    pub fn arity(self) -> Option<u8> {
+    pub fn arity(self) -> Option<u64> {
         unsafe {
-            if let Tag::Arity(n) = byte_item(*self.ptr) { Some(n) }
-            else { None }
+            match byte_item(*self.ptr) {
+                Tag::Arity(n) => Some(n as u64),
+                Tag::LongArity => Some(read_arity_at(self.ptr)),
+                _ => None,
+            }
         }
     }
 
@@ -346,7 +407,7 @@ impl Expr {
     }
 
     pub fn max_arity(self) -> Option<u8> {
-        traverse!(u8, Option<u8>, self, |_| None, |_, _| None, |_, _| None, |_, a| a, |_, x, y: Option<u8>| u8::max(x, y.unwrap_or(0)), |_, x| Some(x))
+        traverse!(u8, Option<u8>, self, |_| None, |_, _| None, |_, _| None, |_, a| a as u8, |_, x, y: Option<u8>| u8::max(x, y.unwrap_or(0)), |_, x| Some(x))
     }
 
     pub fn has_unbound(self) -> bool {
@@ -420,6 +481,13 @@ impl Expr {
                     }
                     var_count += 1;
                  }
+                Tag::LongVarRef => {
+                    let r = unsafe { read_var_ref_at(ez.root.ptr.byte_add(ez.loc)) };
+                    match unsafe { substitutions[r as usize].span().as_ref() } {
+                        None => { oz.write_var_ref(r); unsafe { oz.loc += var_ref_byte_count_at(oz.root.ptr.byte_add(oz.loc)); } }
+                        Some(r) => { oz.write_move(r); }
+                    }
+                }
                 Tag::VarRef(r) => {
                     match unsafe { substitutions[r as usize].span().as_ref() } {
                         None => { oz.write_var_ref(r); oz.loc += 1; }
@@ -427,7 +495,7 @@ impl Expr {
                     }
                 }
                 Tag::SymbolSize(s) => { oz.write_move(unsafe { slice_from_raw_parts(ez.root.ptr.byte_add(ez.loc), s as usize + 1).as_ref().unwrap() }); }
-                Tag::Arity(_) => { unsafe { *oz.root.ptr.byte_add(oz.loc) = *ez.root.ptr.byte_add(ez.loc); oz.loc += 1; }; }
+                Tag::Arity(_) | Tag::LongArity => { unsafe { let n = arity_byte_count_at(ez.root.ptr.byte_add(ez.loc)); std::ptr::copy_nonoverlapping(ez.root.ptr.byte_add(ez.loc), oz.root.ptr.byte_add(oz.loc), n); oz.loc += n; } }
             }
 
             if !ez.next() {
@@ -452,6 +520,19 @@ impl Expr {
                     }
                     var_count += 1;
                 }
+                Tag::LongVarRef => {
+                    let r = unsafe { read_var_ref_at(ez.root.ptr.byte_add(ez.loc)) };
+                    if new_var == r {
+                        oz.write_var_ref(refer_to);
+                        unsafe { oz.loc += var_ref_byte_count_at(oz.root.ptr.byte_add(oz.loc)); }
+                    } else if r > new_var {
+                        oz.write_var_ref(r - 1);
+                        unsafe { oz.loc += var_ref_byte_count_at(oz.root.ptr.byte_add(oz.loc)); }
+                    } else {
+                        oz.write_var_ref(r);
+                        unsafe { oz.loc += var_ref_byte_count_at(oz.root.ptr.byte_add(oz.loc)); }
+                    }
+                }
                 Tag::VarRef(r) => {
                     if new_var == r {
                         oz.write_var_ref(refer_to);
@@ -465,7 +546,7 @@ impl Expr {
                     }
                 }
                 Tag::SymbolSize(s) => { oz.write_move(unsafe { slice_from_raw_parts(ez.root.ptr.byte_add(ez.loc), s as usize + 1).as_ref().unwrap() }); }
-                Tag::Arity(_) => { unsafe { *oz.root.ptr.byte_add(oz.loc) = *ez.root.ptr.byte_add(ez.loc); oz.loc += 1; }; }
+                Tag::Arity(_) | Tag::LongArity => { unsafe { let n = arity_byte_count_at(ez.root.ptr.byte_add(ez.loc)); std::ptr::copy_nonoverlapping(ez.root.ptr.byte_add(ez.loc), oz.root.ptr.byte_add(oz.loc), n); oz.loc += n; } }
             }
 
             if !ez.next() {
@@ -486,6 +567,14 @@ impl Expr {
                     }
                     var_count += 1;
                 }
+                Tag::LongVarRef => {
+                    let r = unsafe { read_var_ref_at(ez.root.ptr.byte_add(ez.loc)) };
+                    if new_var == r {
+                        ez.write_var_ref(refer_to);
+                    } else if r > new_var {
+                        ez.write_var_ref(r - 1);
+                    }
+                }
                 Tag::VarRef(r) => {
                     if new_var == r {
                         ez.write_var_ref(refer_to);
@@ -494,7 +583,7 @@ impl Expr {
                     }
                 }
                 Tag::SymbolSize(_s) => {  }
-                Tag::Arity(_) => {  }
+                Tag::Arity(_) | Tag::LongArity => { }
             }
 
             if !ez.next() {
@@ -519,6 +608,12 @@ impl Expr {
                     }
                     var_count += 1;
                 }
+                Tag::LongVarRef => {
+                    let r = unsafe { read_var_ref_at(ez.root.ptr.byte_add(ez.loc)) };
+                    if refers[r as usize] != 0xffu8 {
+                        ez.write_var_ref(refers[r as usize]);
+                    }
+                }
                 Tag::VarRef(r) => {
                     if refers[r as usize] != 0xffu8 {
                         ez.write_var_ref(refers[r as usize]);
@@ -527,7 +622,7 @@ impl Expr {
                     }
                 }
                 Tag::SymbolSize(_s) => {  }
-                Tag::Arity(_) => {  }
+                Tag::Arity(_) | Tag::LongArity => { }
             }
 
             if !ez.next() {
@@ -555,11 +650,15 @@ impl Expr {
                     // TODO reference parent and get count that way, future additions don't need to happen yet
                     for j in *var_count..additions.len() { additions[j] += nvars; }
                 }
+                Tag::LongVarRef => {
+                    let r = unsafe { read_var_ref_at(ez.root.ptr.byte_add(ez.loc)) };
+                    substitutions[r as usize].bind(additions[r as usize], oz);
+                }
                 Tag::VarRef(r) => {
                     substitutions[r as usize].bind(additions[r as usize], oz);
                 }
                 Tag::SymbolSize(s) => { oz.write_move(unsafe { slice_from_raw_parts(ez.root.ptr.byte_add(ez.loc), s as usize + 1).as_ref().unwrap() }); }
-                Tag::Arity(_) => { unsafe { *oz.root.ptr.byte_add(oz.loc) = *ez.root.ptr.byte_add(ez.loc); oz.loc += 1; }; }
+                Tag::Arity(_) | Tag::LongArity => { unsafe { let n = arity_byte_count_at(ez.root.ptr.byte_add(ez.loc)); std::ptr::copy_nonoverlapping(ez.root.ptr.byte_add(ez.loc), oz.root.ptr.byte_add(oz.loc), n); oz.loc += n; } }
             }
 
             if !ez.next() {
@@ -581,11 +680,15 @@ impl Expr {
                     // TODO reference parent and get count that way, future additions don't need to happen yet
                     for j in var_count..additions.len() { additions[j] += nvars; }
                 }
+                Tag::LongVarRef => {
+                    let r = unsafe { read_var_ref_at(ez.root.ptr.byte_add(ez.loc)) };
+                    substitutions[r as usize].bind(additions[r as usize], oz);
+                }
                 Tag::VarRef(r) => {
                     substitutions[r as usize].bind(additions[r as usize], oz);
                 }
                 Tag::SymbolSize(s) => { oz.write_move(unsafe { slice_from_raw_parts(ez.root.ptr.byte_add(ez.loc), s as usize + 1).as_ref().unwrap() }); }
-                Tag::Arity(_) => { unsafe { *oz.root.ptr.byte_add(oz.loc) = *ez.root.ptr.byte_add(ez.loc); oz.loc += 1; }; }
+                Tag::Arity(_) | Tag::LongArity => { unsafe { let n = arity_byte_count_at(ez.root.ptr.byte_add(ez.loc)); std::ptr::copy_nonoverlapping(ez.root.ptr.byte_add(ez.loc), oz.root.ptr.byte_add(oz.loc), n); oz.loc += n; } }
             }
 
             if !ez.next() {
@@ -604,11 +707,15 @@ impl Expr {
                 Tag::NewVar => {
                     oz.write_var_ref(n + var_count); oz.loc += 1; var_count += 1;
                 }
+                Tag::LongVarRef => {
+                    let i = unsafe { read_var_ref_at(ez.root.ptr.byte_add(ez.loc)) };
+                    oz.write_var_ref(n + i); oz.loc += 1;
+                }
                 Tag::VarRef(i) => {
                     oz.write_var_ref(n + i); oz.loc += 1; // good
                 }
                 Tag::SymbolSize(s) => { oz.write_move(unsafe { slice_from_raw_parts(ez.root.ptr.byte_add(ez.loc), s as usize + 1).as_ref().unwrap() }); }
-                Tag::Arity(_) => { unsafe { *oz.root.ptr.byte_add(oz.loc) = *ez.root.ptr.byte_add(ez.loc); oz.loc += 1; }; }
+                Tag::Arity(_) | Tag::LongArity => { unsafe { let n = arity_byte_count_at(ez.root.ptr.byte_add(ez.loc)); std::ptr::copy_nonoverlapping(ez.root.ptr.byte_add(ez.loc), oz.root.ptr.byte_add(oz.loc), n); oz.loc += n; } }
             }
 
             if !ez.next() {
@@ -624,9 +731,10 @@ impl Expr {
         loop {
             match ez.tag() {
                 Tag::NewVar => { oz.write_new_var(); oz.loc += 1; new_var += 1; }
+                Tag::LongVarRef => { let i = unsafe { read_var_ref_at(ez.root.ptr.byte_add(ez.loc)) }; oz.write_var_ref(i + n); oz.loc += 1; }
                 Tag::VarRef(i) => { oz.write_var_ref(i + n); oz.loc += 1; }
                 Tag::SymbolSize(s) => { oz.write_move(unsafe { slice_from_raw_parts(ez.root.ptr.byte_add(ez.loc), s as usize + 1).as_ref().unwrap() }); }
-                Tag::Arity(_) => { unsafe { *oz.root.ptr.byte_add(oz.loc) = *ez.root.ptr.byte_add(ez.loc); oz.loc += 1; }; }
+                Tag::Arity(_) | Tag::LongArity => { unsafe { let n = arity_byte_count_at(ez.root.ptr.byte_add(ez.loc)); std::ptr::copy_nonoverlapping(ez.root.ptr.byte_add(ez.loc), oz.root.ptr.byte_add(oz.loc), n); oz.loc += n; } }
             }
 
             if !ez.next() {
@@ -643,17 +751,22 @@ impl Expr {
 
     pub fn unbind(self, oz: &mut ExprZipper) -> *const [u8] {
         let mut ez = ExprZipper::new(self);
-        let mut bound = [255; 64];
+        let mut bound = [255; 128];
         let mut nvars = 0;
         loop {
             match ez.tag() {
                 Tag::NewVar => { oz.write_new_var(); oz.loc += 1; nvars += 1; }
+                Tag::LongVarRef => {
+                    let i = unsafe { read_var_ref_at(ez.root.ptr.byte_add(ez.loc)) };
+                    if (i as usize) < nvars || bound[i as usize] != 255 { oz.write_var_ref(bound[i as usize]); oz.loc += 1; }
+                    else { oz.write_new_var(); bound[i as usize] = nvars as u8; nvars += 1; oz.loc += 1; }
+                }
                 Tag::VarRef(i) => {
                     if (i as usize) < nvars || bound[i as usize] != 255 { oz.write_var_ref(bound[i as usize]); oz.loc += 1; }
                     else { oz.write_new_var(); bound[i as usize] = nvars as u8; nvars += 1; oz.loc += 1; }
                 }
                 Tag::SymbolSize(s) => { oz.write_move(unsafe { slice_from_raw_parts(ez.root.ptr.byte_add(ez.loc), s as usize + 1).as_ref().unwrap() }); }
-                Tag::Arity(_) => { unsafe { *oz.root.ptr.byte_add(oz.loc) = *ez.root.ptr.byte_add(ez.loc); oz.loc += 1; }; }
+                Tag::Arity(_) | Tag::LongArity => { unsafe { let n = arity_byte_count_at(ez.root.ptr.byte_add(ez.loc)); std::ptr::copy_nonoverlapping(ez.root.ptr.byte_add(ez.loc), oz.root.ptr.byte_add(oz.loc), n); oz.loc += n; } }
             }
 
             if !ez.next() {
@@ -870,8 +983,9 @@ impl Expr {
                 Ok(Tag::NewVar) => { unsafe { *oz.root.ptr.byte_add(oz.loc) = *ez.root.ptr.byte_add(ez.loc); oz.loc += 1; }; }
                 Ok(Tag::VarRef(_i)) => { unsafe { *oz.root.ptr.byte_add(oz.loc) = *ez.root.ptr.byte_add(ez.loc); oz.loc += 1; }; }
                 Ok(Tag::SymbolSize(_s)) => { unreachable!() }
-                Ok(Tag::Arity(_)) => { unsafe { *oz.root.ptr.byte_add(oz.loc) = *ez.root.ptr.byte_add(ez.loc); oz.loc += 1; }; }
+                Ok(Tag::Arity(_)) | Ok(Tag::LongArity) => { unsafe { let n = arity_byte_count_at(ez.root.ptr.byte_add(ez.loc)); std::ptr::copy_nonoverlapping(ez.root.ptr.byte_add(ez.loc), oz.root.ptr.byte_add(oz.loc), n); oz.loc += n; }; }
                 Err(s) => { let ns = subst(s); oz.write_symbol(ns); oz.loc += 1 + ns.len(); }
+                Ok(Tag::LongVarRef) => { unsafe { let n = var_ref_byte_count_at(ez.root.ptr.byte_add(ez.loc)); std::ptr::copy_nonoverlapping(ez.root.ptr.byte_add(ez.loc), oz.root.ptr.byte_add(oz.loc), n); oz.loc += n; }; }
             }
 
             if !ez.next() {
@@ -919,7 +1033,7 @@ pub trait Traversal<A, R> {
     fn new_var(&mut self, offset: usize) -> R;
     fn var_ref(&mut self, offset: usize, i: u8) -> R;
     fn symbol(&mut self, offset: usize, s: &[u8]) -> R;
-    fn zero(&mut self, offset: usize, a: u8) -> A;
+    fn zero(&mut self, offset: usize, a: u64) -> A;
     fn add(&mut self, offset: usize, acc: A, sub: R) -> A;
     fn finalize(&mut self, offset: usize, acc: A) -> R;
 }
@@ -930,7 +1044,7 @@ impl <A1, A2, R1, R2, T1 : Traversal<A1, R1>, T2 : Traversal<A2, R2>> Traversal<
     fn new_var(&mut self, offset: usize) -> (R1, R2) { (self.t1.new_var(offset), self.t2.new_var(offset)) }
     fn var_ref(&mut self, offset: usize, i: u8) -> (R1, R2) { (self.t1.var_ref(offset, i), self.t2.var_ref(offset, i)) }
     fn symbol(&mut self, offset: usize, s: &[u8]) -> (R1, R2) { (self.t1.symbol(offset, s), self.t2.symbol(offset, s)) }
-    fn zero(&mut self, offset: usize, a: u8) -> (A1, A2) { (self.t1.zero(offset, a), self.t2.zero(offset, a)) }
+    fn zero(&mut self, offset: usize, a: u64) -> (A1, A2) { (self.t1.zero(offset, a), self.t2.zero(offset, a)) }
     fn add(&mut self, offset: usize, acc: (A1, A2), sub: (R1, R2)) -> (A1, A2) { (self.t1.add(offset, acc.0, sub.0), self.t2.add(offset, acc.1, sub.1)) }
     fn finalize(&mut self, offset: usize, acc: (A1, A2)) -> (R1, R2) { (self.t1.finalize(offset, acc.0), self.t2.finalize(offset, acc.1)) }
 }
@@ -946,6 +1060,17 @@ fn execute<A, R, T : Traversal<A, R>>(t: &mut T, e: Expr, i: usize) -> (usize, R
         }
         Tag::Arity(a) => {
             let mut offset = 1;
+            let mut acc = t.zero(i, a as u64);
+            for k in 0..a {
+                let (d, r) = execute(t, e, i + offset);
+                acc = t.add(i + offset, acc, r);
+                offset += d;
+            }
+            (offset, t.finalize(i + offset, acc))
+        }
+        Tag::LongArity => {
+            let a = unsafe { read_arity_at(e.ptr.byte_add(i)) };
+            let mut offset = 2;
             let mut acc = t.zero(i, a);
             for k in 0..a {
                 let (d, r) = execute(t, e, i + offset);
@@ -953,6 +1078,11 @@ fn execute<A, R, T : Traversal<A, R>>(t: &mut T, e: Expr, i: usize) -> (usize, R
                 offset += d;
             }
             (offset, t.finalize(i + offset, acc))
+        }
+        Tag::LongVarRef => {
+            let bc = unsafe { var_ref_byte_count_at(e.ptr.byte_add(i)) };
+            let r = unsafe { read_var_ref_at(e.ptr.byte_add(i)) };
+            (bc, t.var_ref(i, r))
         }
     }
 }
@@ -967,7 +1097,7 @@ pub fn execute_loop<A, R, T : Traversal<A, R>>(t: &mut T, e: Expr, i: usize) -> 
     // 1 add(add(zero(), symbol(a)), finalize(add(add(zero(), symbol(x)), symbol(y)))), 2 zero()
     // value = symbol(p); 1 add(add(zero(), symbol(a)), finalize(add(add(zero(), symbol(x)), symbol(y)))), 1 add(zero(), symbol(p))
     // value = symbol(q); 1 add(add(zero(), symbol(a)), finalize(add(add(zero(), symbol(x)), symbol(y)))); value = finalize(add(add(zero(), symbol(p)), symbol(q))); value = finalize(add(..., ...)); return
-    struct State<X> { iter: u8, payload: X }
+    struct State<X> { iter: u64, payload: X }
     let mut stack: SmallVec<[State<A>; 8]> = SmallVec::new();
     // let mut stack = vec![];
     let mut j = i;
@@ -982,14 +1112,31 @@ pub fn execute_loop<A, R, T : Traversal<A, R>>(t: &mut T, e: Expr, i: usize) -> 
                 v
             }
             Tag::Arity(a) => {
-                let acc = t.zero(j, a);
+                let acc = t.zero(j, a as u64);
                 j += 1;
+                if a == 0 {
+                    t.finalize(j, acc)
+                } else {
+                    stack.push(State{ iter: a as u64, payload: acc });
+                    continue 'putting;
+                }
+            }
+            Tag::LongArity => {
+                let a = unsafe { read_arity_at(e.ptr.byte_add(j)) };
+                let acc = t.zero(j, a);
+                j += 2;
                 if a == 0 {
                     t.finalize(j, acc)
                 } else {
                     stack.push(State{ iter: a, payload: acc });
                     continue 'putting;
                 }
+            }
+            Tag::LongVarRef => {
+                let bc = unsafe { var_ref_byte_count_at(e.ptr.byte_add(j)) };
+                let r = unsafe { read_var_ref_at(e.ptr.byte_add(j)) };
+                j += bc;
+                t.var_ref(j - bc, r)
             }
         };
 
@@ -1047,8 +1194,8 @@ fn match2<F : FnMut(&mut T1, Expr, usize, &mut T2, Expr, usize),
         (Tag::Arity(a1), Tag::Arity(a2)) if a1 == a2 => {
             let mut offset1 = 1;
             let mut offset2 = 1;
-            let mut acc1 = t1.zero(i1, a1);
-            let mut acc2 = t2.zero(i2, a2);
+            let mut acc1 = t1.zero(i1, a1 as u64);
+            let mut acc2 = t2.zero(i2, a2 as u64);
             for k in 0..a1 {
                 let (d1, r1, d2, r2) = match2(t1, e1, i1 + offset1, t2, e2, i2 + offset2, hole)?;
                 acc1 = t1.add(i1 + offset1, acc1, r1);
@@ -1069,11 +1216,11 @@ enum Remaining {
     
 }
 
-pub fn execute_loop_truncated<A, R, T : Traversal<A, R>>(t: &mut T, e: Expr, m: usize) -> Result<(usize, R), (Vec<(u8, A)>, u8)> {
-let mut stack: Vec<(u8, A)> = Vec::with_capacity(8);
+pub fn execute_loop_truncated<A, R, T : Traversal<A, R>>(t: &mut T, e: Expr, m: usize) -> Result<(usize, R), (Vec<(u64, A)>, u64)> {
+let mut stack: Vec<(u64, A)> = Vec::with_capacity(8);
     let mut j = 0;
     'putting: loop {
-        if j == m { return Err((stack, 0u8)) }
+        if j == m { return Err((stack, 0u64)) }
         let mut value = match unsafe { byte_item(*e.ptr.byte_add(j)) } {
             Tag::NewVar => { j += 1; t.new_var(j - 1) }
             Tag::VarRef(r) => { j += 1; t.var_ref(j - 1, r) }
@@ -1085,10 +1232,23 @@ let mut stack: Vec<(u8, A)> = Vec::with_capacity(8);
                 v
             }
             Tag::Arity(a) => {
-                let acc = t.zero(j, a);
+                let acc = t.zero(j, a as u64);
                 j += 1;
+                stack.push((a as u64, acc));
+                continue 'putting;
+            }
+            Tag::LongArity => {
+                let a = unsafe { read_arity_at(e.ptr.byte_add(j)) };
+                let acc = t.zero(j, a);
+                j += 2;
                 stack.push((a, acc));
                 continue 'putting;
+            }
+            Tag::LongVarRef => {
+                let bc = unsafe { var_ref_byte_count_at(e.ptr.byte_add(j)) };
+                let r = unsafe { read_var_ref_at(e.ptr.byte_add(j)) };
+                j += bc;
+                t.var_ref(j - bc, r)
             }
         };
 
@@ -1121,7 +1281,7 @@ impl Traversal<(), ()> for DebugTraversal {
         Ok(string) => { if self.transient { self.string.push(' '); }; self.string.push_str(string); }
         Err(_) => { if self.transient { self.string.push(' '); }; for b in s { self.string.push_str(format!("\\x{:x}", b).as_str()); }; }
     } }
-    #[inline(always)] fn zero(&mut self, offset: usize, a: u8) -> () { if self.transient { self.string.push(' '); }; self.string.push('('); self.transient = false; }
+    #[inline(always)] fn zero(&mut self, offset: usize, a: u64) -> () { if self.transient { self.string.push(' '); }; self.string.push('('); self.transient = false; }
     #[inline(always)] fn add(&mut self, offset: usize, acc: (), sub: ()) -> () { self.transient = true; }
     #[inline(always)] fn finalize(&mut self, offset: usize, acc: ()) -> () { self.string.push(')'); }
 }
@@ -1140,7 +1300,7 @@ impl <Target : std::io::Write, F : for <'b> Fn(&'b [u8]) -> &'b str> Traversal<(
     #[inline(always)] fn new_var(&mut self, offset: usize) -> () { if self.transient { self.out.write_all(" ".as_bytes()); }; self.out.write_all("$".as_bytes()); }
     #[inline(always)] fn var_ref(&mut self, offset: usize, i: u8) -> () { if self.transient { self.out.write_all(" ".as_bytes()); }; self.out.write_all("_".as_bytes()); self.out.write_all((i as u16 + 1).to_string().as_bytes()); }
     #[inline(always)] fn symbol(&mut self, offset: usize, s: &[u8]) -> () { if self.transient { self.out.write_all(" ".as_bytes()); }; self.out.write_all((self.map_symbol)(s).as_bytes()); }
-    #[inline(always)] fn zero(&mut self, offset: usize, a: u8) -> () { if self.transient { self.out.write_all(" ".as_bytes()); }; self.out.write_all("(".as_bytes()); self.transient = false; }
+    #[inline(always)] fn zero(&mut self, offset: usize, a: u64) -> () { if self.transient { self.out.write_all(" ".as_bytes()); }; self.out.write_all("(".as_bytes()); self.transient = false; }
     #[inline(always)] fn add(&mut self, offset: usize, acc: (), sub: ()) -> () { self.transient = true; }
     #[inline(always)] fn finalize(&mut self, offset: usize, acc: ()) -> () { self.out.write_all(")".as_bytes()); }
 }
@@ -1151,7 +1311,7 @@ impl <Target : std::io::Write, F : for <'b> Fn(&'b [u8]) -> &'b str, G : Fn(u8, 
     #[inline(always)] fn new_var(&mut self, offset: usize) -> () { if self.transient { self.out.write_all(" ".as_bytes()); }; self.out.write_all((self.map_variable)(self.n, true).as_bytes()); self.n += 1; }
     #[inline(always)] fn var_ref(&mut self, offset: usize, i: u8) -> () { if self.transient { self.out.write_all(" ".as_bytes()); }; self.out.write_all((self.map_variable)(i, false).as_bytes()); }
     #[inline(always)] fn symbol(&mut self, offset: usize, s: &[u8]) -> () { if self.transient { self.out.write_all(" ".as_bytes()); }; self.out.write_all((self.map_symbol)(s).as_bytes()); }
-    #[inline(always)] fn zero(&mut self, offset: usize, a: u8) -> () { if self.transient { self.out.write_all(" ".as_bytes()); }; self.out.write_all("(".as_bytes()); self.transient = false; }
+    #[inline(always)] fn zero(&mut self, offset: usize, a: u64) -> () { if self.transient { self.out.write_all(" ".as_bytes()); }; self.out.write_all("(".as_bytes()); self.transient = false; }
     #[inline(always)] fn add(&mut self, offset: usize, acc: (), sub: ()) -> () { self.transient = true; }
     #[inline(always)] fn finalize(&mut self, offset: usize, acc: ()) -> () { self.out.write_all(")".as_bytes()); }
 }
@@ -1178,7 +1338,7 @@ impl <Target : std::io::Write, F : for <'b> Fn(&'b [u8]) -> &'b str, G : Fn(u8, 
         self.out.write_all((self.map_symbol)(s).as_bytes());
         if offset == self.targets[0].0 { self.out.write_all(self.targets[0].2.as_bytes()); self.targets = &self.targets[1..]; }
     }
-    #[inline(always)] fn zero(&mut self, offset: usize, a: u8) -> Option<&'static str> {
+    #[inline(always)] fn zero(&mut self, offset: usize, a: u64) -> Option<&'static str> {
         if self.transient { self.out.write_all(" ".as_bytes()); };
         if offset == self.targets[0].0 { self.out.write_all(self.targets[0].1.as_bytes()); }
         self.out.write_all("(".as_bytes()); self.transient = false;
@@ -1207,8 +1367,8 @@ impl <H : Hasher, F : for <'b> Fn(&'b [u8], &'b mut H), G : for <'b> Fn(u8, bool
     #[inline(always)] fn symbol(&mut self, offset: usize, s: &[u8]) -> () {
         (self.map_symbol)(s, &mut self.hasher);
     }
-    #[inline(always)] fn zero(&mut self, offset: usize, a: u8) -> () {
-        self.hasher.write_u8(a);
+    #[inline(always)] fn zero(&mut self, offset: usize, a: u64) -> () {
+        self.hasher.write_u8(a as u8);
     }
     #[inline(always)] fn add(&mut self, offset: usize, acc: (), sub: ()) -> () {
         ()
@@ -1235,9 +1395,19 @@ impl ExprZipper {
                 Self {
                     root: e,
                     loc: 0,
-                    trace: vec![Breadcrumb { parent: 0, arity: a, seen: 0 }],
+                    trace: vec![Breadcrumb { parent: 0, arity: a as u64, seen: 0 }],
                     // trace: vec![],
                 }
+            }
+            Tag::LongArity => {
+                Self {
+                    root: e,
+                    loc: 0,
+                    trace: vec![Breadcrumb { parent: 0, arity: read_arity_at(e.ptr), seen: 0 }],
+                }
+            }
+            Tag::LongVarRef => {
+                Self { root: e, loc: 0, trace: vec![] }
             }
         }
     }
@@ -1251,9 +1421,18 @@ impl ExprZipper {
     #[inline] pub fn subexpr(&self) -> Expr { unsafe { Expr { ptr: self.root.ptr.byte_add(self.loc) } } }
     #[inline] pub fn span(&self) -> &[u8] { unsafe { &*slice_from_raw_parts(self.root.ptr, self.loc) } }
 
-    pub fn write_arity(&mut self, arity: u8) -> bool {
+    /// Write an arity tag at the current position.
+    /// Returns `true` on success.
+    /// NOTE: This method does NOT advance `self.loc`; callers must advance by
+    /// `arity_byte_count_at(self.root.ptr.byte_add(self.loc))` after calling.
+    pub fn write_arity(&mut self, arity: u64) -> bool {
         unsafe {
-            *self.root.ptr.byte_add(self.loc) = item_byte(Tag::Arity(arity));
+            if arity >= 64 {
+                *self.root.ptr.byte_add(self.loc) = 0b0100_0000 | (arity as u8 & 0b0011_1111);
+                *self.root.ptr.byte_add(self.loc + 1) = (arity >> 6) as u8;
+            } else {
+                *self.root.ptr.byte_add(self.loc) = item_byte(Tag::Arity(arity as u8));
+            }
             true
         }
     }
@@ -1283,9 +1462,19 @@ impl ExprZipper {
             true
         }
     }
+    /// Write a VarRef tag byte(s).
+    /// For index < 63: single byte `0b10_iiiiii`.
+    /// For index >= 63: two bytes `0xBF <index>`.
+    /// NOTE: Does NOT advance `self.loc` — callers must advance by
+    /// `var_ref_byte_count_at(...)` after calling.
     pub fn write_var_ref(&mut self, index: u8) -> bool {
         unsafe {
-            *self.root.ptr.byte_add(self.loc) = item_byte(Tag::VarRef(index));
+            if index < 63 {
+                *self.root.ptr.byte_add(self.loc) = 0b1000_0000 | index;
+            } else {
+                *self.root.ptr.byte_add(self.loc) = 0b1011_1111; // LongVarRef escape
+                *self.root.ptr.byte_add(self.loc + 1) = index;
+            }
             true
         }
     }
@@ -1296,6 +1485,8 @@ impl ExprZipper {
             Tag::VarRef(r) => { format!("_{}", r + 1) }
             Tag::SymbolSize(s) => { format!("({})", s) }
             Tag::Arity(a) => { format!("[{}]", a) }
+            Tag::LongArity => { format!("[{}]", unsafe { read_arity_at(self.root.ptr.byte_add(self.loc)) }) }
+            Tag::LongVarRef => { format!("_{}", unsafe { read_var_ref_at(self.root.ptr.byte_add(self.loc)) } + 1) }
         }
     }
 
@@ -1306,6 +1497,7 @@ impl ExprZipper {
                     Tag::NewVar => { "$".to_string() }
                     Tag::VarRef(r) => { format!("_{}", r + 1) }
                     Tag::Arity(a) => { format!("[{}]", a) }
+                    Tag::LongArity => { format!("[{}]", unsafe { read_arity_at(self.root.ptr.byte_add(self.loc)) }) }
                     _ => { unreachable!() }
                 }
             }
@@ -1331,14 +1523,16 @@ impl ExprZipper {
             Some(&mut Breadcrumb { parent: _p, arity: a, seen: ref mut s }) => {
                 // println!("parent {} loc {} tag {}", p, self.loc, ct);
                 // println!("{} < {}", s, a);
-                if *s < a {
+                if (*s as u64) < a {
                     *s += 1;
                     let ss = *s;
 
                     self.loc += if let Tag::SymbolSize(n) = self.tag() { n as usize + 1 } else { 1 };
 
                     if let Tag::Arity(a) = self.tag() {
-                        self.trace.push(Breadcrumb { parent: self.loc as u32, arity: a, seen: 0 })
+                        self.trace.push(Breadcrumb { parent: self.loc as u32, arity: a as u64, seen: 0 })
+                    } else if let Tag::LongArity = self.tag() {
+                        self.trace.push(Breadcrumb { parent: self.loc as u32, arity: read_arity_at(unsafe { self.root.ptr.byte_add(self.loc) }), seen: 0 })
                     }
 
                     // println!("returned true");
@@ -1372,7 +1566,7 @@ impl ExprZipper {
                 //     
                 // }
 
-                if *s < a {
+                if (*s as u64) < a {
                     *s += 1;
                     let ss = *s;
 
@@ -1387,7 +1581,8 @@ impl ExprZipper {
                         Tag::NewVar => { 1 }
                         Tag::VarRef(_) => { 1 }
                         Tag::SymbolSize(n) => { n as usize + 1 }
-                        Tag::Arity(_) => { self.subexpr().span().len() }
+                        Tag::Arity(_) | Tag::LongArity => { self.subexpr().span().len() }
+                        Tag::LongVarRef => { unsafe { var_ref_byte_count_at(self.root.ptr.byte_add(self.loc)) } }
                     };
 
                     // println!("returned true");
@@ -1412,8 +1607,10 @@ impl ExprZipper {
     pub fn reset(&mut self) -> bool {
         self.loc = 0;
         unsafe { self.trace.set_len(0); }
-        if let Tag::Arity(a) = unsafe { byte_item(*self.root.ptr) } {
-            self.trace.push(Breadcrumb {parent: 0, arity:a, seen : 0})
+        match unsafe { byte_item(*self.root.ptr) } {
+            Tag::Arity(a) => { self.trace.push(Breadcrumb {parent: 0, arity: a as u64, seen: 0}); }
+            Tag::LongArity => { self.trace.push(Breadcrumb {parent: 0, arity: read_arity_at(self.root.ptr), seen: 0}); }
+            _ => {}
         }
         true
     }
@@ -1476,6 +1673,22 @@ impl ExprZipper {
                 print!(")");
                 offset
             }
+            Ok(Tag::LongArity) => {
+                let a = unsafe { read_arity_at(self.root.ptr.byte_add(self.loc + i)) };
+                print!("(");
+                let mut offset = 2;
+                for k in 0..a {
+                    offset += self.traverse(i + offset);
+                    if k != (a - 1) { print!(" ") }
+                }
+                print!(")");
+                offset
+            }
+            Ok(Tag::LongVarRef) => {
+                let r = unsafe { read_var_ref_at(self.root.ptr.byte_add(self.loc + i)) };
+                print!("_{}", r + 1);
+                unsafe { var_ref_byte_count_at(self.root.ptr.byte_add(self.loc + i)) }
+            }
             Err(b) => {
                 print!("{}", b as usize);
                 1
@@ -1490,6 +1703,8 @@ impl ExprZipper {
             Tag::SymbolSize(s) => { 1 + (s as usize) }
             Tag::Arity(0) => { 1 }
             Tag::Arity(_a) => { unreachable!() /* expression can't end in non-zero expression */ }
+            Tag::LongArity => { arity_byte_count_at(unsafe { self.root.ptr.byte_add(self.loc) }) }
+            Tag::LongVarRef => { unsafe { var_ref_byte_count_at(self.root.ptr.byte_add(self.loc)) } }
         };
         return slice_from_raw_parts(self.root.ptr, size)
     }
@@ -1662,6 +1877,21 @@ pub fn serialize(bytes: &[u8]) -> String {
                         result.push(']');
                         i += 1;
                     },
+                    Tag::LongArity => {
+                        let lo = bytes[i] as u64 & 0b0011_1111;
+                        let hi = if i + 1 < bytes.len() { bytes[i + 1] as u64 } else { 0 };
+                        let a = lo | (hi << 6);
+                        result.push('[');
+                        result.push_str(&format!("{}", a));
+                        result.push(']');
+                        i += 2;
+                    },
+                    Tag::LongVarRef => {
+                        let idx = read_var_ref_at(&bytes[i]);
+                        result.push('_');
+                        result.push_str(&format!("{}", idx + 1));
+                        i += 2;
+                    },
                     Tag::SymbolSize(s) => {
                         i += 1;
                         if i + (s as usize) > bytes.len() {
@@ -1747,7 +1977,7 @@ impl Traversal<(), ()> for TraverseSide {
     #[inline(always)] fn new_var(&mut self, offset: usize) -> () { self.ee.v += 1; }
     #[inline(always)] fn var_ref(&mut self, offset: usize, i: u8) -> () {}
     #[inline(always)] fn symbol(&mut self, offset: usize, s: &[u8]) -> () {}
-    #[inline(always)] fn zero(&mut self, offset: usize, a: u8) -> () {}
+    #[inline(always)] fn zero(&mut self, offset: usize, a: u64) -> () {}
     #[inline(always)] fn add(&mut self, offset: usize, acc: (), sub: ()) -> () {}
     #[inline(always)] fn finalize(&mut self, offset: usize, acc: ()) -> () {}
 }
@@ -1789,7 +2019,8 @@ impl ExprEnv {
                 Tag::NewVar => { Some((self.n, self.v)) }
                 Tag::VarRef(i) => { Some((self.n, i)) }
                 Tag::SymbolSize(_) => { None }
-                Tag::Arity(_) => { None }
+                Tag::Arity(_) | Tag::LongArity => { None }
+                Tag::LongVarRef => { Some((self.n, unsafe { read_var_ref_at(self.base.ptr.add(self.offset as usize)) })) }
             }
         }
     }
@@ -1817,12 +2048,35 @@ impl ExprEnv {
     pub fn args(&self, dest: &mut Vec<Self>) {
         unsafe {
         match byte_item(*self.subsexpr().ptr) {
-            Tag::NewVar | Tag::VarRef(_) | Tag::SymbolSize(_) => { }
+            Tag::NewVar | Tag::VarRef(_) | Tag::SymbolSize(_) | Tag::LongVarRef => { }
             Tag::Arity(k) => {
                 let mut env = ExprEnv{
                     n: self.n,
                     v: self.v,
                     offset: self.offset + 1,
+                    base: self.base,
+                };
+                for sk in 0..k {
+                    let (se_c, _, se_offset) = traverseh!((), (), u8, env.subsexpr(), 0,
+                        |c: &mut u8, o| { *c += 1; },
+                        |_, o, r| {},
+                        |_, o, _| {},
+                        |_, o, _| {},
+                        |_, o, x, y| {},
+                        |_, _, _| {});
+
+                    let ne = env.clone();
+                    dest.push(ne);
+                    env.offset += se_offset as u32;
+                    env.v += se_c;
+                }
+            }
+            Tag::LongArity => {
+                let k = read_arity_at(self.subsexpr().ptr);
+                let mut env = ExprEnv{
+                    n: self.n,
+                    v: self.v,
+                    offset: self.offset + 2,
                     base: self.base,
                 };
                 for sk in 0..k {
@@ -1954,8 +2208,48 @@ pub fn apply(n: u8, mut original_intros: u8, mut new_intros: u8, ez: &mut ExprZi
                 }
                 Ok(Tag::Arity(a)) => {
                     if PRINT_DEBUG { println!("{}@ [{}]", "  ".repeat(depth), a); }
-                    oz.write_arity(a);
+                    oz.write_arity(a as u64);
                     oz.loc += 1;
+                }
+                Ok(Tag::LongArity) => {
+                    let a = unsafe { read_arity_at(ez.root.ptr.byte_add(ez.loc)) };
+                    if PRINT_DEBUG { println!("{}@ [{}]", "  ".repeat(depth), a); }
+                    oz.write_arity(a);
+                    if a >= 64 { oz.loc += 2; } else { oz.loc += 1; }
+                }
+                Ok(Tag::LongVarRef) => {
+                    let i = unsafe { read_var_ref_at(ez.root.ptr.byte_add(ez.loc)) };
+                    match bindings.get(&(n, i)) {
+                        None => {
+                            if PRINT_DEBUG { println!("{}@ _{} no binding for {:?}", "  ".repeat(depth), i+1, (n, i)); }
+                            if let Some(pos) = assignments.iter().position(|e| *e == (n, i)) {
+                                oz.write_var_ref(pos as u8);
+                            } else {
+                                oz.write_new_var();
+                                new_intros += 1;
+                                assignments.push((n, i));
+                            }
+                            unsafe { oz.loc += var_ref_byte_count_at(oz.root.ptr.byte_add(oz.loc)); }
+                        }
+                        Some(rhs) => {
+                            if PRINT_DEBUG { println!("{}@ _{} with binding +{} {} for {:?}", "  ".repeat(depth), i+1, rhs.n, rhs.show(), (n, i)); }
+                            if let Some(introduced) = cycled.get(&(n, i)) {
+                                if PRINT_DEBUG { println!("{}cycled _{} for {:?} (ref) rhs={}", "  ".repeat(depth), *introduced+1, (n, i), rhs.show()); }
+                                oz.write_var_ref(*introduced);
+                                unsafe { oz.loc += var_ref_byte_count_at(oz.root.ptr.byte_add(oz.loc)); }
+                            } else if stack.contains(&(n, i)) {
+                                cycled.insert((n, i), new_intros);
+                                oz.write_new_var();
+                                oz.loc += 1;
+                                new_intros += 1;
+                            } else {
+                                stack.push((n, i));
+                                let (_, nvars_) = apply(rhs.n, rhs.v, new_intros, &mut ExprZipper::new(rhs.subsexpr()), bindings, oz, cycled, stack, assignments);
+                                new_intros = nvars_;
+                                stack.pop();
+                            }
+                        }
+                    }
                 }
             }
 
@@ -2248,8 +2542,24 @@ fn anti_unify_apply(
             unsafe {
                 match byte_item(*lhs.base.ptr.add(lhs.offset as usize)) {
                     Tag::Arity(k) => {
-                        oz.write_arity(k);
+                        oz.write_arity(k as u64);
                         oz.loc += 1;
+
+                        largs.clear();
+                        rargs.clear();
+                        lhs.args(&mut largs);
+                        rhs.args(&mut rargs);
+                        debug_assert_eq!(largs.len(), rargs.len());
+
+                        // Preorder: push children reversed so they pop in-order.
+                        for i in (0..largs.len()).rev() {
+                            stack.push((largs[i], rargs[i]));
+                        }
+                    }
+                    Tag::LongArity => {
+                        let a = unsafe { read_arity_at(lhs.base.ptr.add(lhs.offset as usize)) };
+                        oz.write_arity(a);
+                        oz.loc += if a >= 64 { 2 } else { 1 };
 
                         largs.clear();
                         rargs.clear();
@@ -2276,6 +2586,8 @@ fn anti_unify_apply(
                     }
 
                     Tag::NewVar | Tag::VarRef(_) => unreachable!("decomposable() excludes vars"),
+
+                    Tag::LongVarRef => unreachable!("decomposable() excludes LongVarRef"),
                 }
             }
         } else {
@@ -2286,9 +2598,9 @@ fn anti_unify_apply(
             if let Some(&v) = st.memo.get(&key) {
                 if PRINT_DEBUG { println!("did find re-use ({}, {}) = {}", lhs.show(), rhs.show(), v); }
                 oz.write_var_ref(v);
-                oz.loc += 1;
+                unsafe { oz.loc += var_ref_byte_count_at(oz.root.ptr.byte_add(oz.loc)); }
             } else {
-                if st.next_var >= 64 {
+                if st.next_var >= 128 {
                     return Err(AntiUnificationFailure::TooManyVars);
                 }
                 let v: AuVar = st.next_var as AuVar;
