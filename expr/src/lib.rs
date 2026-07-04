@@ -782,7 +782,7 @@ impl Expr {
     pub fn anti_unify(self, other: Expr, o: &mut ExprZipper) -> Result<(), AntiUnificationFailure> {
         let mut st = AuState {
             next_var: 0,
-            memo: HashMap::new(),
+            memo: Default::default(),
             left: BTreeMap::new(),
             right: BTreeMap::new(),
         };
@@ -2265,7 +2265,7 @@ pub fn apply(n: u8, mut original_intros: u8, mut new_intros: u8, ez: &mut ExprZi
 pub fn unify(mut stack: &mut Vec<(ExprEnv, ExprEnv)>) -> Result<BTreeMap<ExprVar, ExprEnv>, UnificationFailure> {
     let mut bindings: BTreeMap<ExprVar, ExprEnv> = BTreeMap::new();
     let mut iterations = 0;
-    let mut encountered: gxhash::HashSet<(ExprEnv, ExprEnv)> = gxhash::HashSet::new();
+    let mut encountered: gxhash::HashSet<(ExprEnv, ExprEnv)> = Default::default();
 
     macro_rules! step {
         (occurs $x:expr, $e:expr) => {{
